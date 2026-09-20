@@ -1,0 +1,2 @@
+/api/*  https://digital-wallet-api-production-2f16.up.railway.app/api/:splat  200
+/*      /index.html  200
