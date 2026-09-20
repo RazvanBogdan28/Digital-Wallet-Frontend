@@ -1,93 +1,139 @@
-# Digital Wallet: frontend
+# Digital Wallet — Frontend
 
-React frontend for the [Digital Wallet API](https://github.com/RazvanBogdan28/Digital-Wallet-API). Every wallet is drawn as a banknote: the currency sets the ink (EUR blue, USD green, RON red) and the wallet id seeds a unique guilloche pattern.
+A **React + Vite** single-page client for the [Digital Wallet API](https://github.com/RazvanBogdan28/Digital-Wallet-API), a Spring Boot backend for user authentication, multi-currency wallets, deposits and idempotent transfers.
 
-- **Live API:** https://digital-wallet-api-production-2f16.up.railway.app (Swagger UI at `/swagger-ui/index.html`)
-- **Stack:** React 18, Vite, React Router, Recharts, Lucide icons. Plain CSS, no UI kit. Fonts are self-hosted through Fontsource.
+The client focuses on **clean state management, resilient API handling (automatic token refresh, retry-once-on-401) and a distinctive, editorial visual identity** rather than a generic dashboard look.
+
+## Live Demo
+
+- **App:** https://digitalwalletfrontend.vercel.app
+- **Backend API:** https://digital-wallet-api-production-2f16.up.railway.app
+- **Backend Swagger UI:** https://digital-wallet-api-production-2f16.up.railway.app/swagger-ui/index.html
+- **Backend repo:** https://github.com/RazvanBogdan28/Digital-Wallet-API
+
+Create an account on the live app to try it — registration is open, and wallets start at a balance of 0.
+
+## Screenshots
+
+| Sign in | Dashboard |
+|---|---|
+| ![Sign in](docs/screenshot-login.png) | ![Dashboard](docs/screenshot-dashboard.png) |
+
+| Wallet detail |
+|---|
+| ![Wallet detail](docs/screenshot-wallet.png) |
 
 ## Features
 
-| Area | What it does |
-| --- | --- |
-| Auth | Register (auto sign-in), login, silent access-token refresh on `401` (single flight, then retry), logout that revokes the refresh token |
-| Wallets | One wallet per currency (EUR, USD, RON), created with one click from the dashboard |
-| Deposit | Amount validation (max 2 decimals), quick amounts, confirmation stamp |
-| Send money | Transfers by wallet number with a note. Sends a fresh `Idempotency-Key` per attempt and reuses it only after a network failure, so a retry can never move money twice |
-| History | Paginated ledger per wallet, plus a recent-activity feed merged across wallets |
-| Balance chart | Step chart rebuilt by walking transactions backwards from the current balance |
-| Admin | `ADMIN` users get a Users page: search, and expand a user to see wallets and balances |
-| Privacy | "Hide amounts" toggle masks every balance, ledger amount and chart value |
-| Responsive | Rail turns into a bottom bar, sheets become bottom sheets, ledger reflows on phones |
+- Email/password registration and sign in
+- Stateless JWT auth with silent, single-flight **access token refresh** on 401 — a user is never bounced to the login screen mid-session just because their access token expired
+- Multi-currency wallets (EUR, USD, RON), one per currency per user
+- Deposits and wallet-to-wallet transfers, with a client-generated **Idempotency-Key** per transfer so a double-tap or a retried request never sends money twice
+- Paginated transaction history with a derived balance-over-time chart
+- Wallet **ownership enforcement** reflected in the UI — attempting to open another user's wallet shows a clear "you do not have access" state instead of leaking data
+- Admin view listing all users and, on demand, their wallets (role-gated, hidden entirely from non-admin accounts)
+- "Hide amounts" privacy toggle, persisted locally, for using the app in public
+- Toast notifications, inline form validation, and human-readable error messages mapped from the API's structured error responses
+- Responsive layout with a print/export-style "wallet card" visual per currency
 
-## Run it
+## Tech Stack
+
+- React 18
+- Vite
+- React Router
+- Recharts (balance chart)
+- lucide-react (icons)
+- Vercel (hosting, with `vercel.json` rewrites)
+
+## Architecture
+
+```text
+src/
+├── App.jsx                 route table + auth/admin route guards
+├── main.jsx                app entry, providers
+├── lib/
+│   ├── api.js               fetch wrapper: auth header, error mapping, token refresh + retry
+│   ├── auth.jsx              AuthProvider — session state, login/register/logout, admin detection
+│   ├── privacy.jsx           "hide amounts" toggle, persisted to localStorage
+│   ├── ledger.js              transaction list → chart series / table rows
+│   └── format.js              currency + date formatting helpers
+├── pages/
+│   ├── AuthPage.jsx           sign in / register
+│   ├── Dashboard.jsx          wallet overview + recent activity
+│   ├── WalletPage.jsx         single wallet: balance chart, deposit, send, paginated history
+│   └── AdminPage.jsx          admin-only user directory
+└── components/                 wallet "card" visuals, deposit/send sheets, toasts, ledger table, etc.
+```
+
+### Session handling
+
+All authenticated requests go through a single `request()` helper in `lib/api.js`:
+
+1. Attaches `Authorization: Bearer <accessToken>` from the in-memory/localStorage session.
+2. On a `401`, triggers **one** shared refresh call (concurrent 401s await the same in-flight refresh instead of each starting their own) and retries the original request exactly once with the new token.
+3. If the retry also fails, the session is cleared and the user is routed back to sign in — otherwise, expired tokens are invisible to the user.
+
+### Ownership and roles in the UI
+
+The backend enforces wallet ownership and admin-only routes; the frontend mirrors this defensively:
+
+- `WalletPage` renders a dedicated "Wallet unavailable" state on a `403`, rather than a generic error.
+- `/admin` is guarded client-side by the token's role and hidden from navigation for non-admins — the backend remains the actual source of truth and re-checks the role on every request.
+
+## Running Locally
+
+### Requirements
+
+- Node.js 18+
+- The backend running somewhere reachable (locally, or the deployed Railway instance)
+
+### Setup
 
 ```bash
 npm install
-cp .env.example .env   # optional, defaults already point to the Railway API
-npm run dev            # http://localhost:5173
+cp .env.example .env
+npm run dev
 ```
 
-In development every `/api/*` call goes through the Vite proxy, so **no CORS setup is needed** locally.
+By default `VITE_API_URL` is left empty, so the Vite dev server proxies any `/api/...` call to the backend defined in `VITE_PROXY_TARGET` (the deployed Railway API by default) — this avoids CORS entirely during local development. Point `VITE_PROXY_TARGET` at `http://localhost:8080` instead if you're also running the backend locally.
 
-## How it reaches the API
+The app runs at:
 
-The client always calls relative `/api/...` URLs unless `VITE_API_URL` is set.
-
-| Where it runs | How `/api` is resolved |
-| --- | --- |
-| `npm run dev` | Vite proxy (`vite.config.js`), target from `VITE_PROXY_TARGET` |
-| Vercel | Rewrite in `vercel.json` |
-| Netlify | `public/_redirects` |
-| Anywhere else (GitHub Pages, S3, ...) | Set `VITE_API_URL` to the full API URL **and** enable CORS on the backend |
-
-### CORS snippet (only needed when `VITE_API_URL` is set)
-
-```java
-@Bean
-CorsConfigurationSource corsConfigurationSource() {
-    CorsConfiguration config = new CorsConfiguration();
-    config.setAllowedOrigins(List.of("http://localhost:5173", "https://your-frontend.example"));
-    config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-    config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Idempotency-Key"));
-    UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-    source.registerCorsConfiguration("/api/**", config);
-    return source;
-}
+```text
+http://localhost:5173
 ```
 
-And in your `SecurityFilterChain`: `http.cors(Customizer.withDefaults())`.
+### Build
 
-## Deploy
-
-**Vercel:** import the repository. Framework preset is Vite, nothing else to configure.
-**Netlify:** build command `npm run build`, publish directory `dist`.
-
-## Endpoints used
-
-| UI | Endpoint |
-| --- | --- |
-| Sign in / Register | `POST /api/auth/login`, `POST /api/users` |
-| Refresh / Sign out | `POST /api/auth/refresh`, `POST /api/auth/logout` |
-| Profile | `GET /api/users/{id}` |
-| Wallet list / detail | `GET /api/wallets/user/{userId}`, `GET /api/wallets/{id}` |
-| Add wallet | `POST /api/wallets` |
-| Deposit | `POST /api/wallets/{id}/deposit` |
-| Send money | `POST /api/wallets/{id}/transfer` with `Idempotency-Key` |
-| History | `GET /api/transactions/wallet/{walletId}?page=&size=` |
-| Admin users | `GET /api/users` |
-
-## Project layout
-
-```
-src/
-  lib/          api client (auth + refresh), formatting, ledger maths, auth and privacy context
-  components/   WalletNote, Guilloche, Ledger, BalanceChart, Deposit/Send sheets, Shell
-  pages/        AuthPage, Dashboard, WalletPage, AdminPage
+```bash
+npm run build
+npm run preview
 ```
 
-## Notes and known limits
+## Deployment
 
-- The API has no "who am I" endpoint, so admin status is read from the token's role claim, falling back to probing the ADMIN-only `GET /api/users`.
-- Transfers need the recipient's wallet number and must be in the same currency (the API rejects currency mismatches).
-- The API does not document its sort order for transactions, so the UI sorts within each page and looks at both ends of the history to find the newest transactions for the chart.
-- Tokens are kept in `localStorage` to keep the demo simple. For production, prefer an `httpOnly` cookie set by the backend.
+The app is deployed on **Vercel**, connected to this repository for automatic deployment on every push to `main`. `vercel.json` rewrites `/api/*` requests to the Railway-hosted backend, so the deployed frontend also talks to the API same-origin, without needing `VITE_API_URL` set or CORS configured for cross-origin calls.
+
+## Related Project
+
+This client is the frontend half of a full-stack portfolio project. See the [Digital Wallet API](https://github.com/RazvanBogdan28/Digital-Wallet-API) repository for the Spring Boot backend, its architecture, and API documentation.
+
+## Project Goals
+
+This project demonstrates frontend development concepts such as:
+
+- consuming a JWT-secured REST API from a single-page app
+- resilient session handling (silent token refresh, single-flight requests)
+- role- and ownership-aware UI states
+- idempotent write operations from the client side
+- component-driven UI without a heavyweight framework
+- static-site deployment with API rewrites
+
+## Future Improvements
+
+Possible future additions:
+
+- automated end-to-end tests (Playwright/Cypress) covering the ownership and admin flows
+- optimistic UI updates for deposits/transfers
+- dark mode
+- account settings (password change, profile info)
