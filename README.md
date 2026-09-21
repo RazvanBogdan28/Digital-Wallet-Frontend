@@ -1,5 +1,7 @@
 # Digital Wallet — Frontend
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A **React + Vite** single-page client for the [Digital Wallet API](https://github.com/RazvanBogdan28/Digital-Wallet-API), a Spring Boot backend for user authentication, multi-currency wallets, deposits and idempotent transfers.
 
 The client focuses on **clean state management, resilient API handling (automatic token refresh, retry-once-on-401) and a distinctive, editorial visual identity** rather than a generic dashboard look.
@@ -40,7 +42,7 @@ Create an account on the live app to try it — registration is open, and wallet
 
 - React 18
 - Vite
-- React Router
+- React Router 6
 - Recharts (balance chart)
 - lucide-react (icons)
 - Vercel (hosting, with `vercel.json` rewrites)
@@ -78,7 +80,15 @@ All authenticated requests go through a single `request()` helper in `lib/api.js
 The backend enforces wallet ownership and admin-only routes; the frontend mirrors this defensively:
 
 - `WalletPage` renders a dedicated "Wallet unavailable" state on a `403`, rather than a generic error.
-- `/admin` is guarded client-side by the token's role and hidden from navigation for non-admins — the backend remains the actual source of truth and re-checks the role on every request.
+- `/admin` is guarded client-side: after sign-in the app probes the admin-only `GET /api/users` endpoint and only shows the admin view if it succeeds. Non-admins never see it in navigation — and the backend remains the actual source of truth, re-checking the role on every request.
+
+### Security notes
+
+The session (access and refresh tokens) is kept in browser storage. That is a common and convenient choice for a demo client, but it means the tokens are readable by any script that runs in the page, so an XSS vulnerability would expose them.
+
+A production hardening step would be to have the backend set the refresh token in an `HttpOnly`, `Secure`, `SameSite` cookie and keep only the short-lived access token in memory. The `vercel.json` rewrites already keep the frontend and the API on the same origin, which makes that change straightforward.
+
+As always, the backend remains the source of truth: every role and ownership check is re-validated on the server.
 
 ## Running Locally
 
@@ -133,7 +143,12 @@ This project demonstrates frontend development concepts such as:
 
 Possible future additions:
 
+- refresh token in an `HttpOnly` cookie (see [Security notes](#security-notes))
 - automated end-to-end tests (Playwright/Cypress) covering the ownership and admin flows
 - optimistic UI updates for deposits/transfers
 - dark mode
 - account settings (password change, profile info)
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
