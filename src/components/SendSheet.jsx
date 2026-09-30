@@ -3,7 +3,13 @@ import Sheet from './Sheet';
 import Stamp from './Stamp';
 import FormError from './FormError';
 import { api } from '../lib/api';
-import { CURRENCY_INFO, formatMoney, newKey, parseAmount } from '../lib/format';
+import {
+  CURRENCY_INFO,
+  compareMoney,
+  formatMoney,
+  newKey,
+  parseAmount,
+} from '../lib/format';
 
 export default function SendSheet({ wallet, onClose, onDone }) {
   const [toId, setToId] = useState('');
@@ -63,7 +69,7 @@ export default function SendSheet({ wallet, onClose, onDone }) {
       if (!Number.isSafeInteger(target) || target <= 0) return setError('Enter the recipient wallet number, like 42.');
       if (target === wallet.id) return setError('Choose a different wallet than the one you are sending from.');
       if (parsed == null) return setError('Enter an amount of at least 0.01, with up to two decimals.');
-      if (parsed > Number(wallet.balance)) {
+      if (compareMoney(parsed, wallet.balance) > 0) {
         return setError(`That is more than the ${formatMoney(wallet.balance, wallet.currency)} available.`);
       }
 
