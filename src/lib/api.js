@@ -136,38 +136,79 @@ function refreshAccessToken(version) {
 
   const operation = { version, promise: null };
 
-  operation.promise = fetch(`${BASE}/api/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refreshToken }),
-  })
-      .then(async (res) => {
-        if (!res.ok) return false;
+  operation.promise = (async () => {
+    let res;
 
-        const data = await res.json();
-
-        assertCurrentSession(version);
-
-        if (
-            typeof data.accessToken !== 'string' ||
-            !data.accessToken.trim()
-        ) {
-          return false;
-        }
-
-        persistSession({
-          ...session,
-          accessToken: data.accessToken,
-        });
-
-        return true;
-      })
-      .catch(() => false)
-      .finally(() => {
-        if (refreshing === operation) {
-          refreshing = null;
-        }
+    try {
+      res = await fetch(`${BASE}/api/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
       });
+    } catch {
+      assertCurrentSession(version);
+
+      throw new ApiError(
+          0,
+          "Can't refresh your session right now. Check your connection and try again.",
+          { error: 'REFRESH_UNAVAILABLE' },
+      );
+    }
+
+    assertCurrentSession(version);
+
+    // Only an explicit authentication rejection expires the session.
+    if (res.status === 401 || res.status === 403) {
+      return false;
+    }
+
+    if (!res.ok) {
+      throw new ApiError(
+          res.status >= 500 ? res.status : 503,
+          'Could not refresh your session right now. Please try again in a moment.',
+          { error: 'REFRESH_UNAVAILABLE' },
+      );
+    }
+
+    let data;
+
+    try {
+      data = await res.json();
+    } catch {
+      assertCurrentSession(version);
+
+      throw new ApiError(
+          502,
+          'The server returned an invalid refresh response. Please try again.',
+          { error: 'INVALID_REFRESH_RESPONSE' },
+      );
+    }
+
+    assertCurrentSession(version);
+
+    if (
+        !data ||
+        typeof data.accessToken !== 'string' ||
+        !data.accessToken.trim()
+    ) {
+      throw new ApiError(
+          502,
+          'The server returned an invalid refresh response. Please try again.',
+          { error: 'INVALID_REFRESH_RESPONSE' },
+      );
+    }
+
+    persistSession({
+      ...session,
+      accessToken: data.accessToken,
+    });
+
+    return true;
+  })().finally(() => {
+    if (refreshing === operation) {
+      refreshing = null;
+    }
+  });
 
   refreshing = operation;
 
