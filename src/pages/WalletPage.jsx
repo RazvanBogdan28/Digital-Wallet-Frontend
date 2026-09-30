@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, Plus, Send } from 'lucide-react';
 import WalletNote from '../components/WalletNote';
@@ -18,8 +25,24 @@ const PAGE_SIZE = 10;
 export default function WalletPage() {
   const { id } = useParams();
   const walletId = Number(id);
-  const toast = useToast();
 
+  if (!Number.isSafeInteger(walletId) || walletId <= 0) {
+    return (
+        <div className="notice">
+          <h1>Wallet unavailable</h1>
+          <FormError>Invalid wallet number.</FormError>
+          <Link to="/" className="btn btn-primary">
+            Back to wallets
+          </Link>
+        </div>
+    );
+  }
+
+  return <WalletDetails key={id} walletId={walletId} />;
+}
+
+function WalletDetails({ walletId }) {
+  const toast = useToast();
   const [wallet, setWallet] = useState(null);
   const [win, setWin] = useState(null);
   const [page, setPage] = useState(0);
@@ -34,63 +57,112 @@ export default function WalletPage() {
   const [chartLoading, setChartLoading] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  const activeRef = useRef(false);
+  const walletRequestRef = useRef(0);
+  const chartRequestRef = useRef(0);
+  const historyRequestRef = useRef(0);
+  const pageRef = useRef(page);
+
+  useLayoutEffect(() => {
+    activeRef.current = true;
+
+    return () => {
+      activeRef.current = false;
+      walletRequestRef.current += 1;
+      chartRequestRef.current += 1;
+      historyRequestRef.current += 1;
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    pageRef.current = page;
+    historyRequestRef.current += 1;
+    setData(null);
+    setHistoryError('');
+    setHistoryLoading(true);
+  }, [page]);
+
+  const loadWallet = useCallback(async () => {
+    if (!activeRef.current) return;
+
+    const requestId = ++walletRequestRef.current;
+    const current = () =>
+        activeRef.current && requestId === walletRequestRef.current;
+
+    setWalletError('');
+    setWalletLoading(true);
+
+    try {
+      const next = await api.wallet(walletId);
+      if (current()) setWallet(next);
+    } catch (err) {
+      if (current()) {
+        setWalletError(err.message || 'Could not load this wallet.');
+      }
+    } finally {
+      if (current()) setWalletLoading(false);
+    }
+  }, [walletId]);
+
   const loadChart = useCallback(async () => {
+    if (!activeRef.current) return;
+
+    const requestId = ++chartRequestRef.current;
+    const current = () =>
+        activeRef.current && requestId === chartRequestRef.current;
+
     setChartError('');
     setChartLoading(true);
     setWin(null);
 
     try {
-      setWin(await fetchRecentWindow(walletId));
+      const next = await fetchRecentWindow(walletId);
+      if (current()) setWin(next);
     } catch (err) {
-      setChartError(err.message || 'Could not load the balance chart.');
+      if (current()) {
+        setChartError(err.message || 'Could not load the balance chart.');
+      }
     } finally {
-      setChartLoading(false);
-    }
-  }, [walletId]);
-
-  const loadWallet = useCallback(async () => {
-    setWalletError('');
-    setWalletLoading(true);
-
-    try {
-      setWallet(await api.wallet(walletId));
-    } catch (err) {
-      setWalletError(err.message || 'Could not load this wallet.');
-    } finally {
-      setWalletLoading(false);
+      if (current()) setChartLoading(false);
     }
   }, [walletId]);
 
   const loadPage = useCallback(async (p) => {
+    if (!activeRef.current || p !== pageRef.current) return;
+
+    const requestId = ++historyRequestRef.current;
+    const current = () =>
+        activeRef.current &&
+        requestId === historyRequestRef.current &&
+        p === pageRef.current;
+
     setHistoryError('');
     setHistoryLoading(true);
     setData(null);
 
     try {
-      setData(await api.transactions(walletId, p, PAGE_SIZE));
+      const next = await api.transactions(walletId, p, PAGE_SIZE);
+      if (current()) setData(next);
     } catch (err) {
-      setHistoryError(err.message || 'Could not load transactions.');
+      if (current()) {
+        setHistoryError(err.message || 'Could not load transactions.');
+      }
     } finally {
-      setHistoryLoading(false);
+      if (current()) setHistoryLoading(false);
     }
   }, [walletId]);
 
   useEffect(() => {
-    setWallet(null);
-    setWin(null);
-    setData(null);
-    setPage(0);
-    setSheet(null);
-    setWalletError('');
-    setChartError('');
-    setHistoryError('');
-
     loadWallet();
     loadChart();
-  }, [walletId, loadWallet, loadChart]);
+  }, [loadWallet, loadChart]);
 
   useEffect(() => {
     loadPage(page);
+
+    return () => {
+      historyRequestRef.current += 1;
+    };
   }, [page, loadPage]);
 
   const series = useMemo(
@@ -112,6 +184,8 @@ export default function WalletPage() {
   );
 
   function finished(message) {
+    if (!activeRef.current) return;
+
     setSheet(null);
     toast(message);
     loadWallet();
@@ -176,7 +250,6 @@ export default function WalletPage() {
                     <Plus size={16} aria-hidden="true" />
                     Deposit
                   </button>
-
                   <button
                       type="button"
                       className="btn btn-quiet"
@@ -186,7 +259,6 @@ export default function WalletPage() {
                     <Send size={16} aria-hidden="true" />
                     Send
                   </button>
-
                   <CopyButton
                       value={walletId}
                       message={`Wallet No. ${walletId} copied`}
@@ -221,7 +293,6 @@ export default function WalletPage() {
             </span>
             )}
           </div>
-
           <div className="panel">
             {chartError ? (
                 <div>
@@ -283,9 +354,7 @@ export default function WalletPage() {
                   <ChevronLeft size={15} aria-hidden="true" />
                   Previous
                 </button>
-
                 <span>Page {page + 1} of {totalPages}</span>
-
                 <button
                     type="button"
                     className="btn btn-quiet btn-small"
@@ -306,7 +375,6 @@ export default function WalletPage() {
                 onDone={(_, message) => finished(message)}
             />
         )}
-
         {sheet === 'send' && wallet && (
             <SendSheet
                 wallet={wallet}
