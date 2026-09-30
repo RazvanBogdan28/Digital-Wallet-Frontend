@@ -322,10 +322,11 @@ export const api = {
         body: { userId, currency },
       }),
 
-  deposit: (id, amount) =>
+  deposit: (id, amount, idempotencyKey) =>
       request(`/api/wallets/${id}/deposit`, {
         method: 'POST',
         body: { amount },
+        headers: { 'Idempotency-Key': idempotencyKey },
       }),
 
   transfer: (
