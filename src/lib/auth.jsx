@@ -1,90 +1,270 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { api, getSession, onSessionExpired, saveSession } from './api';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+
+import {
+  api,
+  ApiError,
+  getSession,
+  onSessionExpired,
+  saveSession,
+} from './api';
 
 const AuthCtx = createContext(null);
 
-// The API has no "who am I" endpoint, so admin status is read from the token's role claim
-// when present and otherwise probed with the ADMIN-only GET /api/users.
-function claimsSayAdmin(token) {
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-    return Object.entries(payload).some(
-      ([key, value]) =>
-        /role|authorit|scope|group/i.test(key) && JSON.stringify(value).toUpperCase().includes('ADMIN'),
-    );
-  } catch {
-    return false;
-  }
-}
-
-async function detectAdmin(token) {
-  if (claimsSayAdmin(token)) return true;
+async function detectAdmin() {
   try {
     await api.users();
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // A normal user receives 403 from the ADMIN-only endpoint.
+    if (err.status === 403) return false;
+    throw err;
   }
 }
 
 export function AuthProvider({ children }) {
-  const [state, setState] = useState({ status: 'loading', user: null });
+  const [state, setState] = useState({
+    status: 'loading',
+    user: null,
+    error: '',
+  });
 
-  const hydrate = useCallback(async (userId) => {
-    const user = await api.user(userId);
-    const isAdmin = await detectAdmin(getSession().accessToken);
-    setState({ status: 'authed', user: { ...user, isAdmin } });
-  }, []);
+  const mountedRef = useRef(false);
+  const operationRef = useRef(0);
 
-  useEffect(() => {
-    onSessionExpired(() => setState({ status: 'anon', user: null }));
+  const isCurrent = useCallback(
+      (operation) =>
+          mountedRef.current && operation === operationRef.current,
+      [],
+  );
+
+  const assertCurrent = useCallback(
+      (operation) => {
+        if (!isCurrent(operation)) {
+          throw new ApiError(
+              401,
+              'Your session changed. Please try again.',
+              { error: 'SESSION_CHANGED' },
+          );
+        }
+      },
+      [isCurrent],
+  );
+
+  const hydrate = useCallback(
+      async (session, operation) => {
+        const user = await api.user(session.userId);
+
+        assertCurrent(operation);
+
+        const isAdmin = await detectAdmin();
+
+        assertCurrent(operation);
+
+        setState({
+          status: 'authed',
+          user: { ...user, isAdmin },
+          error: '',
+        });
+      },
+      [assertCurrent],
+  );
+
+  const handleHydrationError = useCallback(
+      (err, operation) => {
+        if (!isCurrent(operation)) return;
+
+        if (
+            (err.status === 401 || err.status === 403) &&
+            err.data?.error !== 'SESSION_CHANGED'
+        ) {
+          saveSession(null);
+
+          setState({
+            status: 'anon',
+            user: null,
+            error: '',
+          });
+
+          return;
+        }
+
+        // Network failures and server errors preserve the stored session.
+        setState({
+          status: 'error',
+          user: null,
+          error:
+              err.message ||
+              'Could not load your session. Please try again.',
+        });
+      },
+      [isCurrent],
+  );
+
+  const retry = useCallback(async () => {
+    const operation = ++operationRef.current;
     const session = getSession();
+
     if (!session) {
-      setState({ status: 'anon', user: null });
+      setState({
+        status: 'anon',
+        user: null,
+        error: '',
+      });
+
       return;
     }
-    hydrate(session.userId).catch(() => {
-      saveSession(null);
-      setState({ status: 'anon', user: null });
+
+    setState({
+      status: 'loading',
+      user: null,
+      error: '',
     });
-  }, [hydrate]);
+
+    try {
+      await hydrate(session, operation);
+    } catch (err) {
+      handleHydrationError(err, operation);
+    }
+  }, [hydrate, handleHydrationError]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    onSessionExpired(() => {
+      operationRef.current += 1;
+
+      if (mountedRef.current) {
+        setState({
+          status: 'anon',
+          user: null,
+          error: '',
+        });
+      }
+    });
+
+    void retry();
+
+    return () => {
+      mountedRef.current = false;
+      operationRef.current += 1;
+      onSessionExpired(() => {});
+    };
+  }, [retry]);
 
   const login = useCallback(
-    async (email, password) => {
-      const res = await api.login(email, password);
-      saveSession({
-        userId: res.userId,
-        email: res.email,
-        accessToken: res.accessToken,
-        refreshToken: res.refreshToken,
-      });
-      try {
-        await hydrate(res.userId);
-      } catch (err) {
-        saveSession(null);
-        throw err;
-      }
-    },
-    [hydrate],
+      async (email, password) => {
+        const operation = ++operationRef.current;
+
+        const res = await api.login(email, password);
+
+        assertCurrent(operation);
+
+        const next = {
+          userId: res.userId,
+          email: res.email,
+          accessToken: res.accessToken,
+          refreshToken: res.refreshToken,
+        };
+
+        saveSession(next);
+
+        setState({
+          status: 'loading',
+          user: null,
+          error: '',
+        });
+
+        try {
+          await hydrate(next, operation);
+        } catch (err) {
+          handleHydrationError(err, operation);
+          throw err;
+        }
+      },
+      [assertCurrent, hydrate, handleHydrationError],
   );
 
   const register = useCallback(
-    async (payload) => {
-      await api.register(payload);
-      await login(payload.email, payload.password);
-    },
-    [login],
+      async (payload) => {
+        const operation = ++operationRef.current;
+
+        await api.register(payload);
+
+        assertCurrent(operation);
+
+        await login(payload.email, payload.password);
+      },
+      [assertCurrent, login],
   );
 
   const logout = useCallback(async () => {
+    operationRef.current += 1;
+
     const session = getSession();
+
     saveSession(null);
-    setState({ status: 'anon', user: null });
-    if (session?.refreshToken) await api.logout(session.refreshToken);
+
+    setState({
+      status: 'anon',
+      user: null,
+      error: '',
+    });
+
+    if (session?.refreshToken) {
+      await api.logout(session.refreshToken);
+    }
   }, []);
 
-  const value = useMemo(() => ({ ...state, login, register, logout }), [state, login, register, logout]);
-  return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
+  const value = useMemo(
+      () => ({
+        ...state,
+        login,
+        register,
+        logout,
+        retry,
+      }),
+      [state, login, register, logout, retry],
+  );
+
+  if (state.status === 'error') {
+    return (
+        <div className="notice notice-page">
+          <h1>Could not load your session</h1>
+
+          <p role="alert">{state.error}</p>
+
+          <button
+              type="button"
+              className="btn btn-primary"
+              onClick={retry}
+          >
+            Try again
+          </button>
+
+          <button
+              type="button"
+              className="btn btn-quiet"
+              onClick={logout}
+          >
+            Sign out
+          </button>
+        </div>
+    );
+  }
+
+  return (
+      <AuthCtx.Provider value={value}>
+        {children}
+      </AuthCtx.Provider>
+  );
 }
 
 export const useAuth = () => useContext(AuthCtx);
