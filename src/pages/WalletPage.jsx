@@ -7,7 +7,13 @@ import {
   useState,
 } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft, ChevronLeft, ChevronRight, Plus, Send } from 'lucide-react';
+import {
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Send,
+} from 'lucide-react';
 import WalletNote from '../components/WalletNote';
 import Ledger from '../components/Ledger';
 import BalanceChart from '../components/BalanceChart';
@@ -16,14 +22,21 @@ import DepositSheet from '../components/DepositSheet';
 import SendSheet from '../components/SendSheet';
 import FormError from '../components/FormError';
 import { useToast } from '../components/Toast';
+import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
 import { CURRENCY_INFO } from '../lib/format';
-import { balanceSeries, byNewest, fetchRecentWindow, toRows } from '../lib/ledger';
+import {
+  balanceSeries,
+  byNewest,
+  fetchRecentWindow,
+  toRows,
+} from '../lib/ledger';
 
 const PAGE_SIZE = 10;
 
 export default function WalletPage() {
   const { id } = useParams();
+  const { user } = useAuth();
   const walletId = Number(id);
 
   if (!Number.isSafeInteger(walletId) || walletId <= 0) {
@@ -38,28 +51,31 @@ export default function WalletPage() {
     );
   }
 
-  return <WalletDetails key={id} walletId={walletId} />;
+  if (!user) return null;
+
+  return (
+      <WalletDetails
+          key={`${user.id}:${walletId}`}
+          walletId={walletId}
+      />
+  );
 }
 
 function WalletDetails({ walletId }) {
   const toast = useToast();
-  const [wallet, setWallet] = useState(null);
-  const [win, setWin] = useState(null);
+
+  const [snapshot, setSnapshot] = useState(null);
+  const [snapshotError, setSnapshotError] = useState('');
+  const [snapshotLoading, setSnapshotLoading] = useState(true);
+
   const [page, setPage] = useState(0);
   const [data, setData] = useState(null);
+  const [historyError, setHistoryError] = useState('');
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [sheet, setSheet] = useState(null);
 
-  const [walletError, setWalletError] = useState('');
-  const [chartError, setChartError] = useState('');
-  const [historyError, setHistoryError] = useState('');
-
-  const [walletLoading, setWalletLoading] = useState(false);
-  const [chartLoading, setChartLoading] = useState(false);
-  const [historyLoading, setHistoryLoading] = useState(false);
-
   const activeRef = useRef(false);
-  const walletRequestRef = useRef(0);
-  const chartRequestRef = useRef(0);
+  const snapshotRequestRef = useRef(0);
   const historyRequestRef = useRef(0);
   const pageRef = useRef(page);
 
@@ -68,8 +84,7 @@ function WalletDetails({ walletId }) {
 
     return () => {
       activeRef.current = false;
-      walletRequestRef.current += 1;
-      chartRequestRef.current += 1;
+      snapshotRequestRef.current += 1;
       historyRequestRef.current += 1;
     };
   }, []);
@@ -82,48 +97,33 @@ function WalletDetails({ walletId }) {
     setHistoryLoading(true);
   }, [page]);
 
-  const loadWallet = useCallback(async () => {
+  const loadSnapshot = useCallback(async () => {
     if (!activeRef.current) return;
 
-    const requestId = ++walletRequestRef.current;
+    const requestId = ++snapshotRequestRef.current;
     const current = () =>
-        activeRef.current && requestId === walletRequestRef.current;
+        activeRef.current &&
+        requestId === snapshotRequestRef.current;
 
-    setWalletError('');
-    setWalletLoading(true);
-
-    try {
-      const next = await api.wallet(walletId);
-      if (current()) setWallet(next);
-    } catch (err) {
-      if (current()) {
-        setWalletError(err.message || 'Could not load this wallet.');
-      }
-    } finally {
-      if (current()) setWalletLoading(false);
-    }
-  }, [walletId]);
-
-  const loadChart = useCallback(async () => {
-    if (!activeRef.current) return;
-
-    const requestId = ++chartRequestRef.current;
-    const current = () =>
-        activeRef.current && requestId === chartRequestRef.current;
-
-    setChartError('');
-    setChartLoading(true);
-    setWin(null);
+    setSnapshotError('');
+    setSnapshotLoading(true);
 
     try {
       const next = await fetchRecentWindow(walletId);
-      if (current()) setWin(next);
+
+      if (current()) {
+        setSnapshot(next);
+      }
     } catch (err) {
       if (current()) {
-        setChartError(err.message || 'Could not load the balance chart.');
+        setSnapshotError(
+            err.message || 'Could not load the wallet and balance chart.',
+        );
       }
     } finally {
-      if (current()) setChartLoading(false);
+      if (current()) {
+        setSnapshotLoading(false);
+      }
     }
   }, [walletId]);
 
@@ -142,20 +142,26 @@ function WalletDetails({ walletId }) {
 
     try {
       const next = await api.transactions(walletId, p, PAGE_SIZE);
-      if (current()) setData(next);
+
+      if (current()) {
+        setData(next);
+      }
     } catch (err) {
       if (current()) {
-        setHistoryError(err.message || 'Could not load transactions.');
+        setHistoryError(
+            err.message || 'Could not load transactions.',
+        );
       }
     } finally {
-      if (current()) setHistoryLoading(false);
+      if (current()) {
+        setHistoryLoading(false);
+      }
     }
   }, [walletId]);
 
   useEffect(() => {
-    loadWallet();
-    loadChart();
-  }, [loadWallet, loadChart]);
+    loadSnapshot();
+  }, [loadSnapshot]);
 
   useEffect(() => {
     loadPage(page);
@@ -165,19 +171,29 @@ function WalletDetails({ walletId }) {
     };
   }, [page, loadPage]);
 
+  const wallet = snapshot?.wallet ?? null;
+
   const series = useMemo(
       () => (
-          wallet && win
-              ? balanceSeries(win.items, walletId, wallet.balance)
+          snapshot
+              ? balanceSeries(
+                  snapshot.items,
+                  walletId,
+                  snapshot.wallet.balance,
+                  snapshot.snapshotAt,
+              )
               : []
       ),
-      [wallet, win, walletId],
+      [snapshot, walletId],
   );
 
   const rows = useMemo(
       () => (
           data
-              ? toRows([...data.content].sort(byNewest), new Set([walletId]))
+              ? toRows(
+                  [...data.content].sort(byNewest),
+                  new Set([walletId]),
+              )
               : null
       ),
       [data, walletId],
@@ -188,25 +204,27 @@ function WalletDetails({ walletId }) {
 
     setSheet(null);
     toast(message);
-    loadWallet();
-    loadChart();
+    loadSnapshot();
 
-    if (page === 0) loadPage(0);
-    else setPage(0);
+    if (page === 0) {
+      loadPage(0);
+    } else {
+      setPage(0);
+    }
   }
 
-  if (walletError && !wallet) {
+  if (snapshotError && !wallet) {
     return (
         <div className="notice">
           <h1>Wallet unavailable</h1>
-          <FormError>{walletError}</FormError>
+          <FormError>{snapshotError}</FormError>
           <button
               type="button"
               className="btn btn-quiet"
-              disabled={walletLoading}
-              onClick={loadWallet}
+              disabled={snapshotLoading}
+              onClick={loadSnapshot}
           >
-            {walletLoading ? 'Loading…' : 'Retry'}
+            {snapshotLoading ? 'Loading…' : 'Retry'}
           </button>
           <Link to="/" className="btn btn-primary">
             Back to wallets
@@ -217,6 +235,8 @@ function WalletDetails({ walletId }) {
 
   const info = wallet ? CURRENCY_INFO[wallet.currency] : null;
   const totalPages = data?.totalPages ?? 0;
+  const actionsDisabled =
+      snapshotLoading || Boolean(snapshotError);
 
   return (
       <>
@@ -244,21 +264,23 @@ function WalletDetails({ walletId }) {
                   <button
                       type="button"
                       className="btn btn-primary"
-                      disabled={walletLoading || Boolean(walletError)}
+                      disabled={actionsDisabled}
                       onClick={() => setSheet('deposit')}
                   >
                     <Plus size={16} aria-hidden="true" />
                     Deposit
                   </button>
+
                   <button
                       type="button"
                       className="btn btn-quiet"
-                      disabled={walletLoading || Boolean(walletError)}
+                      disabled={actionsDisabled}
                       onClick={() => setSheet('send')}
                   >
                     <Send size={16} aria-hidden="true" />
                     Send
                   </button>
+
                   <CopyButton
                       value={walletId}
                       message={`Wallet No. ${walletId} copied`}
@@ -268,16 +290,23 @@ function WalletDetails({ walletId }) {
                 </div>
             )}
 
-            {wallet && walletError && (
+            {wallet && snapshotLoading && (
+                <p className="muted">Refreshing balance…</p>
+            )}
+
+            {wallet && snapshotError && (
                 <div>
-                  <FormError>{walletError}</FormError>
+                  <FormError>{snapshotError}</FormError>
+                  <p className="sheet-note">
+                    The displayed balance could not be refreshed.
+                  </p>
                   <button
                       type="button"
                       className="btn btn-quiet btn-small"
-                      disabled={walletLoading}
-                      onClick={loadWallet}
+                      disabled={snapshotLoading}
+                      onClick={loadSnapshot}
                   >
-                    Retry wallet
+                    Retry wallet and chart
                   </button>
                 </div>
             )}
@@ -287,27 +316,32 @@ function WalletDetails({ walletId }) {
         <section className="section" aria-labelledby="chart-title">
           <div className="section-head">
             <h2 id="chart-title">Balance</h2>
-            {win && !win.complete && (
+            {snapshot && !snapshot.complete && (
                 <span className="muted">
-              Latest {win.items.length} transactions
+              Latest {snapshot.items.length} transactions
             </span>
             )}
           </div>
+
           <div className="panel">
-            {chartError ? (
+            {snapshotLoading ? (
+                <div className="skel skel-chart" aria-busy="true" />
+            ) : snapshotError ? (
                 <div>
-                  <FormError>{chartError}</FormError>
+                  <FormError>{snapshotError}</FormError>
                   <button
                       type="button"
                       className="btn btn-quiet btn-small"
-                      disabled={chartLoading}
-                      onClick={loadChart}
+                      onClick={loadSnapshot}
                   >
-                    Retry chart
+                    Retry wallet and chart
                   </button>
                 </div>
-            ) : wallet && win ? (
-                <BalanceChart points={series} currency={wallet.currency} />
+            ) : snapshot ? (
+                <BalanceChart
+                    points={series}
+                    currency={snapshot.wallet.currency}
+                />
             ) : (
                 <div className="skel skel-chart" aria-busy="true" />
             )}
@@ -318,7 +352,9 @@ function WalletDetails({ walletId }) {
           <div className="section-head">
             <h2 id="history-title">Transactions</h2>
             {data && (
-                <span className="muted">{data.totalElements} in total</span>
+                <span className="muted">
+              {data.totalElements} in total
+            </span>
             )}
           </div>
 
@@ -337,7 +373,9 @@ function WalletDetails({ walletId }) {
           ) : rows ? (
               <Ledger
                   rows={rows}
-                  empty="No transactions yet. Deposit into this wallet to see it here."
+                  empty={
+                    'No transactions yet. Deposit into this wallet to see it here.'
+                  }
               />
           ) : (
               <div className="skel skel-ledger" aria-busy="true" />
@@ -354,7 +392,9 @@ function WalletDetails({ walletId }) {
                   <ChevronLeft size={15} aria-hidden="true" />
                   Previous
                 </button>
+
                 <span>Page {page + 1} of {totalPages}</span>
+
                 <button
                     type="button"
                     className="btn btn-quiet btn-small"
@@ -375,6 +415,7 @@ function WalletDetails({ walletId }) {
                 onDone={(_, message) => finished(message)}
             />
         )}
+
         {sheet === 'send' && wallet && (
             <SendSheet
                 wallet={wallet}

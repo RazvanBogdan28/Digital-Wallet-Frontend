@@ -1,21 +1,42 @@
 import { api } from './api';
 import { fromCents, toCents, titleCase } from './format';
 
-const timeOf = (tx) => new Date(tx.createdAt).getTime() || 0;
+const timeOf = (tx) => new Date(tx.createdAt).getTime();
 
-export const byNewest = (a, b) =>
-    timeOf(b) - timeOf(a) || b.id - a.id;
+// Preserve fractional seconds when comparing transaction timestamps.
+function preciseTime(value) {
+  const milliseconds = Date.parse(value);
+
+  if (!Number.isFinite(milliseconds)) return 0n;
+
+  const fraction =
+      String(value).match(/\.(\d+)(?:Z|[+-]\d{2}:\d{2})$/)?.[1] ?? '';
+
+  const remainder = fraction.padEnd(9, '0').slice(3, 9);
+
+  return (
+      BigInt(milliseconds) * 1000000n +
+      BigInt(remainder || '0')
+  );
+}
+
+export function byNewest(a, b) {
+  const first = preciseTime(a.createdAt);
+  const second = preciseTime(b.createdAt);
+
+  if (first === second) return b.id - a.id;
+
+  return first > second ? -1 : 1;
+}
 
 const isDeposit = (tx) =>
-    String(tx.type || '').toUpperCase().includes('DEPOSIT');
+    String(tx.type || '').toUpperCase() === 'DEPOSIT';
 
-// in: incoming money; out: outgoing money;
-// internal: transfers between wallets belonging to the same user.
 export function direction(tx, myIds) {
-  if (isDeposit(tx)) return 'in';
-
   const fromMine = myIds.has(tx.fromWalletId);
   const toMine = myIds.has(tx.toWalletId);
+
+  if (isDeposit(tx) && toMine) return 'in';
 
   if (fromMine && toMine) return 'internal';
   if (toMine) return 'in';
@@ -25,13 +46,22 @@ export function direction(tx, myIds) {
 }
 
 function signedCents(tx, walletId) {
-  const dir = direction(tx, new Set([walletId]));
+  if (String(tx.status || '').toUpperCase() !== 'COMPLETED') {
+    return 0n;
+  }
+
   const amount = toCents(tx.amount);
 
-  return dir === 'in' ? amount : dir === 'out' ? -amount : 0n;
+  if (isDeposit(tx)) {
+    return tx.toWalletId === walletId ? amount : 0n;
+  }
+
+  const incoming = tx.toWalletId === walletId ? amount : 0n;
+  const outgoing = tx.fromWalletId === walletId ? amount : 0n;
+
+  return incoming - outgoing;
 }
 
-// Returns an exact decimal string.
 export function signedAmount(tx, walletId) {
   return fromCents(signedCents(tx, walletId));
 }
@@ -40,6 +70,7 @@ export function toRows(transactions, myIds) {
   return transactions.map((tx) => {
     const dir = direction(tx, myIds);
     const amount = toCents(tx.amount);
+
     let title = tx.description?.trim();
     let detail;
 
@@ -70,58 +101,79 @@ export function toRows(transactions, myIds) {
   });
 }
 
-// Fetches a recent transaction window for the chart.
+// The wallet balance and transactions come from one server snapshot.
 export async function fetchRecentWindow(walletId) {
-  const first = await api.transactions(walletId, 0, 100);
+  const result = await api.transactionWindow(walletId, 100);
 
-  if (first.totalPages <= 1) {
-    return { items: first.content, complete: true };
+  if (
+      !result?.wallet ||
+      result.wallet.id !== walletId ||
+      !Array.isArray(result.items) ||
+      !Number.isFinite(Date.parse(result.snapshotAt))
+  ) {
+    throw new Error(
+        'The server returned invalid wallet history. Please try again.',
+    );
   }
 
-  const last = await api.transactions(
-      walletId,
-      first.totalPages - 1,
-      100,
-  );
-
-  if (first.totalPages === 2) {
-    return {
-      items: [...first.content, ...last.content],
-      complete: true,
-    };
-  }
-
-  const newest = (page) =>
-      Math.max(0, ...page.content.map(timeOf));
-
-  const winner = newest(first) >= newest(last) ? first : last;
-
-  return { items: winner.content, complete: false };
+  return result;
 }
 
-// Rebuilds balances using exact integer cents.
-// Each point keeps its balance as a decimal string.
-export function balanceSeries(items, walletId, currentBalance) {
-  const newestFirst = [...items].sort(byNewest);
-  let balance = toCents(currentBalance);
-  const latest = newestFirst.length ? timeOf(newestFirst[0]) : 0;
+// Calculate with integer cents; expose balances as decimal strings.
+export function balanceSeries(
+    items,
+    walletId,
+    currentBalance,
+    snapshotAt,
+) {
+  const unique = new Map(items.map((tx) => [tx.id, tx]));
 
-  const points = [
-    {
-      ts: Math.max(Date.now(), latest),
-      balance: fromCents(balance),
-    },
-  ];
+  const ordered = [...unique.values()]
+      .sort(byNewest)
+      .reverse();
 
-  for (const tx of newestFirst) {
+  const current = toCents(currentBalance);
+  const snapshotTime = Date.parse(snapshotAt);
+
+  if (!ordered.length) {
+    return [{
+      ts: snapshotTime,
+      balance: fromCents(current),
+      kind: 'snapshot',
+    }];
+  }
+
+  let balance = current;
+
+  for (const tx of ordered) {
+    balance -= signedCents(tx, walletId);
+  }
+
+  const points = [{
+    ts: timeOf(ordered[0]) - 1,
+    balance: fromCents(balance),
+    kind: 'baseline',
+  }];
+
+  for (const tx of ordered) {
+    balance += signedCents(tx, walletId);
+
     points.push({
       ts: timeOf(tx),
       balance: fromCents(balance),
       tx,
+      kind: 'transaction',
     });
-
-    balance -= signedCents(tx, walletId);
   }
 
-  return points.reverse();
+  points.push({
+    ts: Math.max(
+        snapshotTime,
+        timeOf(ordered[ordered.length - 1]),
+    ),
+    balance: fromCents(current),
+    kind: 'snapshot',
+  });
+
+  return points;
 }

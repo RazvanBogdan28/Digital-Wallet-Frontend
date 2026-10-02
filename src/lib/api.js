@@ -381,6 +381,11 @@ export const api = {
         headers: { 'Idempotency-Key': idempotencyKey },
       }),
 
+  transactionWindow: (walletId, size = 100) =>
+      request(
+          `/api/transactions/wallet/${walletId}/window?size=${size}`,
+      ),
+
   transactions: (walletId, page = 0, size = 10) =>
       request(
           `/api/transactions/wallet/${walletId}?page=${page}&size=${size}`,
