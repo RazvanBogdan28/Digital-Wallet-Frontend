@@ -361,12 +361,13 @@ export default function MoneyOperationSheet({
                         duplicate: true,
                     });
                 }
-            } else if (
-                !wasRetry &&
-                [400, 403, 404, 422].includes(err.status)
-            ) {
-                // The first request was explicitly rejected.
-                // An earlier unknown result must remain saved on a retry.
+            } else if ([400, 403, 404, 422].includes(err.status)) {
+                // Any 4xx response — whether on the first attempt or a
+                // retry — proves the operation never succeeded. The
+                // backend's idempotency guarantee means a retry of an
+                // already-completed operation always returns 409
+                // DUPLICATE_TRANSACTION, never a 4xx. So it is always
+                // safe to clear the saved attempt and unlock the form.
                 const removed = forgetStoredAttempt(currentAttempt);
 
                 if (removed) {
