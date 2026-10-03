@@ -130,7 +130,6 @@ export default function MoneyOperationSheet({
     function forgetStoredAttempt(currentAttempt) {
         try {
             const saved = readAttempt(
-                storageKeyRef.current,
                 kind,
                 wallet,
             );
@@ -187,15 +186,6 @@ export default function MoneyOperationSheet({
 
         if (inFlightRef.current) return;
 
-        if (result.updated) {
-            onDone(
-                result.updated,
-                `${isTransfer ? 'Sent' : 'Deposited'} ` +
-                formatMoney(result.amount, wallet.currency),
-            );
-            return;
-        }
-
         if (!sameOwner()) {
             onClose();
             return;
@@ -208,18 +198,28 @@ export default function MoneyOperationSheet({
         try {
             const updated = await api.wallet(wallet.id);
 
-            if (mountedRef.current && sameOwner()) {
-                onDone(
-                    updated,
-                    `${isTransfer ? 'Transfer' : 'Deposit'} ` +
-                    'already processed. Balance refreshed.',
+            if (!mountedRef.current || !sameOwner()) return;
+
+            if (!forgetStoredAttempt(attemptRef.current)) {
+                setError(
+                    'The operation was processed, but its saved details could not ' +
+                    'be cleared. Press Done to retry.',
                 );
+                return;
             }
+
+            onDone(
+                updated,
+                result.duplicate
+                    ? `${isTransfer ? 'Transfer' : 'Deposit'} already processed. Balance refreshed.`
+                    : `${isTransfer ? 'Sent' : 'Deposited'} ` +
+                    formatMoney(result.amount, wallet.currency),
+            );
         } catch (err) {
-            if (mountedRef.current) {
+            if (mountedRef.current && sameOwner()) {
                 setError(
                     err.message ||
-                    'Could not refresh the balance. Retry or close this window.',
+                    'Could not refresh the balance. Press Done to retry.',
                 );
             }
         } finally {
@@ -336,7 +336,6 @@ export default function MoneyOperationSheet({
                 );
 
             completedRef.current = true;
-            forgetStoredAttempt(currentAttempt);
 
             if (mountedRef.current && sameOwner()) {
                 setResult({
@@ -352,7 +351,6 @@ export default function MoneyOperationSheet({
                 err.data?.error === 'DUPLICATE_TRANSACTION'
             ) {
                 completedRef.current = true;
-                forgetStoredAttempt(currentAttempt);
 
                 if (mountedRef.current && sameOwner()) {
                     setResult({
