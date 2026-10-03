@@ -224,10 +224,16 @@ function refreshAccessToken(version) {
     }
 
     if (!res.ok) {
+      if (auth && res.status === 401) {
+        assertCurrentSession(version);
+        saveSession(null);
+        onSessionLost();
+      }
+
       throw new ApiError(
-          res.status >= 500 ? res.status : 503,
-          'Could not refresh your session right now. Please try again in a moment.',
-          { error: 'REFRESH_UNAVAILABLE' },
+          res.status,
+          messageFrom(data, res.status),
+          data,
       );
     }
 
