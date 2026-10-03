@@ -396,4 +396,67 @@ describe('Money operation recovery', () => {
             );
         });
     });
+    it.each(['deposit', 'transfer'])(
+        'closes a successful %s receipt after refresh fails and preserves its key for retry',
+        async (kind) => {
+            mocks[kind].mockResolvedValueOnce({
+                balance: '125.50',
+            });
+
+            mocks.wallet.mockRejectedValueOnce({
+                status: 503,
+                message: 'Server unavailable',
+            });
+
+            const view = open(kind);
+            submit(kind);
+
+            await screen.findByRole('button', { name: 'Done' });
+
+            const saved = storedAttempt();
+
+            fireEvent.click(
+                screen.getByRole('button', { name: 'Done' }),
+            );
+
+            await screen.findByText('Server unavailable');
+
+            fireEvent.click(
+                screen.getByRole('button', {
+                    name: 'Close without refreshing',
+                }),
+            );
+
+            expect(view.onClose).toHaveBeenCalledTimes(1);
+            expect(view.onDone).not.toHaveBeenCalled();
+            expect(storedAttempt()).toEqual(saved);
+
+            view.unmount();
+
+            mocks[kind].mockRejectedValueOnce({
+                status: 409,
+                data: { error: 'DUPLICATE_TRANSACTION' },
+            });
+
+            open(kind);
+
+            expect(
+                screen.getByLabelText('Amount in EUR'),
+            ).toBeDisabled();
+
+            fireEvent.click(
+                screen.getByRole('button', {
+                    name: `Retry same ${kind}`,
+                }),
+            );
+
+            await screen.findByRole('button', { name: 'Done' });
+
+            expect(mocks[kind].mock.calls[1]).toEqual(
+                mocks[kind].mock.calls[0],
+            );
+
+            expect(storedAttempt().key).toBe(saved.key);
+        },
+    );
 });

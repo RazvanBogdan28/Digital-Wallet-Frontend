@@ -459,15 +459,13 @@ export default function MoneyOperationSheet({
                         {busy ? 'Refreshing…' : 'Done'}
                     </button>
 
-                    {result.duplicate && (
-                        <button
-                            type="button"
-                            className="btn btn-quiet"
-                            onClick={closeAnyway}
-                        >
-                            Close without refreshing
-                        </button>
-                    )}
+                    <button
+                        type="button"
+                        className="btn btn-quiet"
+                        onClick={closeAnyway}
+                    >
+                        Close without refreshing
+                    </button>
                 </div>
             ) : (
                 <form className="sheet-form" onSubmit={submit} noValidate>
