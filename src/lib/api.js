@@ -389,6 +389,7 @@ async function request(
 }
 
 export const api = {
+  me: () => request('/api/users/me'),
   login: (email, password) =>
       request('/api/auth/login', {
         method: 'POST',

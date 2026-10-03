@@ -1,270 +1,268 @@
 import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
 } from 'react';
 
 import {
-  api,
-  ApiError,
-  getSession,
-  onSessionExpired,
-  saveSession,
+    api,
+    ApiError,
+    getSession,
+    onExternalSessionChanged,
+    onSessionExpired,
+    saveSession,
+    synchronizeSession,
 } from './api';
 
 const AuthCtx = createContext(null);
 
-async function detectAdmin() {
-  try {
-    await api.users();
-    return true;
-  } catch (err) {
-    // A normal user receives 403 from the ADMIN-only endpoint.
-    if (err.status === 403) return false;
-    throw err;
-  }
-}
-
 export function AuthProvider({ children }) {
-  const [state, setState] = useState({
-    status: 'loading',
-    user: null,
-    error: '',
-  });
-
-  const mountedRef = useRef(false);
-  const operationRef = useRef(0);
-
-  const isCurrent = useCallback(
-      (operation) =>
-          mountedRef.current && operation === operationRef.current,
-      [],
-  );
-
-  const assertCurrent = useCallback(
-      (operation) => {
-        if (!isCurrent(operation)) {
-          throw new ApiError(
-              401,
-              'Your session changed. Please try again.',
-              { error: 'SESSION_CHANGED' },
-          );
-        }
-      },
-      [isCurrent],
-  );
-
-  const hydrate = useCallback(
-      async (session, operation) => {
-        const user = await api.user(session.userId);
-
-        assertCurrent(operation);
-
-        const isAdmin = await detectAdmin();
-
-        assertCurrent(operation);
-
-        setState({
-          status: 'authed',
-          user: { ...user, isAdmin },
-          error: '',
-        });
-      },
-      [assertCurrent],
-  );
-
-  const handleHydrationError = useCallback(
-      (err, operation) => {
-        if (!isCurrent(operation)) return;
-
-        if (
-            (err.status === 401 || err.status === 403) &&
-            err.data?.error !== 'SESSION_CHANGED'
-        ) {
-          saveSession(null);
-
-          setState({
-            status: 'anon',
-            user: null,
-            error: '',
-          });
-
-          return;
-        }
-
-        // Network failures and server errors preserve the stored session.
-        setState({
-          status: 'error',
-          user: null,
-          error:
-              err.message ||
-              'Could not load your session. Please try again.',
-        });
-      },
-      [isCurrent],
-  );
-
-  const retry = useCallback(async () => {
-    const operation = ++operationRef.current;
-    const session = getSession();
-
-    if (!session) {
-      setState({
-        status: 'anon',
+    const [state, setState] = useState({
+        status: 'loading',
         user: null,
         error: '',
-      });
-
-      return;
-    }
-
-    setState({
-      status: 'loading',
-      user: null,
-      error: '',
     });
 
-    try {
-      await hydrate(session, operation);
-    } catch (err) {
-      handleHydrationError(err, operation);
-    }
-  }, [hydrate, handleHydrationError]);
+    const mountedRef = useRef(false);
+    const operationRef = useRef(0);
 
-  useEffect(() => {
-    mountedRef.current = true;
+    const isCurrent = useCallback(
+        (operation) =>
+            mountedRef.current && operation === operationRef.current,
+        [],
+    );
 
-    onSessionExpired(() => {
-      operationRef.current += 1;
+    const assertCurrent = useCallback(
+        (operation) => {
+            synchronizeSession();
 
-      if (mountedRef.current) {
-        setState({
-          status: 'anon',
-          user: null,
-          error: '',
-        });
-      }
-    });
+            if (!isCurrent(operation)) {
+                throw new ApiError(
+                    401,
+                    'Your session changed. Please try again.',
+                    { error: 'SESSION_CHANGED' },
+                );
+            }
+        },
+        [isCurrent],
+    );
 
-    void retry();
+    const hydrate = useCallback(
+        async (operation) => {
+            const user = await api.me();
 
-    return () => {
-      mountedRef.current = false;
-      operationRef.current += 1;
-      onSessionExpired(() => {});
-    };
-  }, [retry]);
+            assertCurrent(operation);
 
-  const login = useCallback(
-      async (email, password) => {
+            setState({
+                status: 'authed',
+                user: {
+                    ...user,
+                    isAdmin: user.role === 'ADMIN',
+                },
+                error: '',
+            });
+        },
+        [assertCurrent],
+    );
+
+    const handleHydrationError = useCallback(
+        (err, operation) => {
+            if (!isCurrent(operation)) return;
+
+            if (
+                err.status === 401 &&
+                err.data?.error !== 'SESSION_CHANGED'
+            ) {
+                saveSession(null);
+
+                setState({
+                    status: 'anon',
+                    user: null,
+                    error: '',
+                });
+
+                return;
+            }
+
+            setState({
+                status: 'error',
+                user: null,
+                error:
+                    err.message ||
+                    'Could not load your session. Please try again.',
+            });
+        },
+        [isCurrent],
+    );
+
+    const retry = useCallback(async () => {
+        synchronizeSession();
+
         const operation = ++operationRef.current;
+        const session = getSession();
 
-        const res = await api.login(email, password);
+        if (!session) {
+            setState({
+                status: 'anon',
+                user: null,
+                error: '',
+            });
 
-        assertCurrent(operation);
-
-        const next = {
-          userId: res.userId,
-          email: res.email,
-          accessToken: res.accessToken,
-          refreshToken: res.refreshToken,
-        };
-
-        saveSession(next);
+            return;
+        }
 
         setState({
-          status: 'loading',
-          user: null,
-          error: '',
+            status: 'loading',
+            user: null,
+            error: '',
         });
 
         try {
-          await hydrate(next, operation);
+            await hydrate(operation);
         } catch (err) {
-          handleHydrationError(err, operation);
-          throw err;
+            handleHydrationError(err, operation);
         }
-      },
-      [assertCurrent, hydrate, handleHydrationError],
-  );
+    }, [hydrate, handleHydrationError]);
 
-  const register = useCallback(
-      async (payload) => {
-        const operation = ++operationRef.current;
+    useEffect(() => {
+        mountedRef.current = true;
 
-        await api.register(payload);
+        onSessionExpired(() => {
+            operationRef.current += 1;
 
-        assertCurrent(operation);
+            if (mountedRef.current) {
+                setState({
+                    status: 'anon',
+                    user: null,
+                    error: '',
+                });
+            }
+        });
 
-        await login(payload.email, payload.password);
-      },
-      [assertCurrent, login],
-  );
+        const unsubscribe = onExternalSessionChanged(() => {
+            void retry();
+        });
 
-  const logout = useCallback(async () => {
-    operationRef.current += 1;
+        void retry();
 
-    const session = getSession();
+        return () => {
+            unsubscribe();
+            mountedRef.current = false;
+            operationRef.current += 1;
+            onSessionExpired(() => {});
+        };
+    }, [retry]);
 
-    saveSession(null);
+    const login = useCallback(
+        async (email, password) => {
+            const operation = ++operationRef.current;
 
-    setState({
-      status: 'anon',
-      user: null,
-      error: '',
-    });
+            const res = await api.login(email, password);
 
-    if (session?.refreshToken) {
-      await api.logout(session.refreshToken);
-    }
-  }, []);
+            assertCurrent(operation);
 
-  const value = useMemo(
-      () => ({
-        ...state,
-        login,
-        register,
-        logout,
-        retry,
-      }),
-      [state, login, register, logout, retry],
-  );
+            const next = {
+                userId: res.userId,
+                email: res.email,
+                accessToken: res.accessToken,
+                refreshToken: res.refreshToken,
+            };
 
-  if (state.status === 'error') {
-    return (
-        <div className="notice notice-page">
-          <h1>Could not load your session</h1>
+            saveSession(next);
 
-          <p role="alert">{state.error}</p>
+            setState({
+                status: 'loading',
+                user: null,
+                error: '',
+            });
 
-          <button
-              type="button"
-              className="btn btn-primary"
-              onClick={retry}
-          >
-            Try again
-          </button>
-
-          <button
-              type="button"
-              className="btn btn-quiet"
-              onClick={logout}
-          >
-            Sign out
-          </button>
-        </div>
+            try {
+                await hydrate(operation);
+            } catch (err) {
+                handleHydrationError(err, operation);
+                throw err;
+            }
+        },
+        [assertCurrent, hydrate, handleHydrationError],
     );
-  }
 
-  return (
-      <AuthCtx.Provider value={value}>
-        {children}
-      </AuthCtx.Provider>
-  );
+    const register = useCallback(
+        async (payload) => {
+            const operation = ++operationRef.current;
+
+            await api.register(payload);
+
+            assertCurrent(operation);
+
+            await login(payload.email, payload.password);
+        },
+        [assertCurrent, login],
+    );
+
+    const logout = useCallback(async () => {
+        operationRef.current += 1;
+
+        const session = getSession();
+
+        saveSession(null);
+
+        setState({
+            status: 'anon',
+            user: null,
+            error: '',
+        });
+
+        if (session?.refreshToken) {
+            await api.logout(session.refreshToken);
+        }
+    }, []);
+
+    const value = useMemo(
+        () => ({
+            ...state,
+            login,
+            register,
+            logout,
+            retry,
+        }),
+        [state, login, register, logout, retry],
+    );
+
+    if (state.status === 'error') {
+        return (
+            <div className="notice notice-page">
+                <h1>Could not load your session</h1>
+
+                <p role="alert">{state.error}</p>
+
+                <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={retry}
+                >
+                    Try again
+                </button>
+
+                <button
+                    type="button"
+                    className="btn btn-quiet"
+                    onClick={logout}
+                >
+                    Sign out
+                </button>
+            </div>
+        );
+    }
+
+    return (
+        <AuthCtx.Provider value={value}>
+            {children}
+        </AuthCtx.Provider>
+    );
 }
 
 export const useAuth = () => useContext(AuthCtx);
