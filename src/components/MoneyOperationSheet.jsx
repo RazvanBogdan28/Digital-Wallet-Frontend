@@ -20,6 +20,7 @@ function readAttempt(storageKey, kind, wallet) {
     const attempt = JSON.parse(raw);
 
     if (
+        !attempt ||
         attempt.version !== 1 ||
         attempt.kind !== kind ||
         attempt.walletId !== wallet.id ||
@@ -28,18 +29,14 @@ function readAttempt(storageKey, kind, wallet) {
         !attempt.key.trim() ||
         attempt.key.length > 255 ||
         parseAmount(attempt.amount) == null ||
-        (kind === 'transfer' &&
-            (
-                !Number.isSafeInteger(attempt.toWalletId) ||
-                attempt.toWalletId <= 0 ||
-                (
-                    attempt.description != null &&
-                    (
-                        typeof attempt.description !== 'string' ||
-                        attempt.description.length > 255
-                    )
-                )
+        (kind === 'transfer' && (
+            !Number.isSafeInteger(attempt.toWalletId) ||
+            attempt.toWalletId <= 0 ||
+            (attempt.description != null && (
+                typeof attempt.description !== 'string' ||
+                attempt.description.length > 255
             ))
+        ))
     ) {
         throw new Error('Invalid saved operation');
     }
@@ -123,25 +120,28 @@ export default function MoneyOperationSheet({
     function sameOwner() {
         const currentOwner = getSession()?.userId;
 
-        return ownerRef.current != null &&
-            String(currentOwner) === String(ownerRef.current);
+        return (
+            ownerRef.current != null &&
+            String(currentOwner) === String(ownerRef.current)
+        );
     }
 
     function forgetStoredAttempt(currentAttempt) {
         try {
+            if (!currentAttempt) return false;
+
             const saved = readAttempt(
+                storageKeyRef.current,
                 kind,
                 wallet,
             );
 
-            // A delayed response must not remove a newer operation.
             if (saved?.key === currentAttempt.key) {
                 sessionStorage.removeItem(storageKeyRef.current);
             }
 
             return true;
         } catch {
-            // Keeping the old key allows a safe retry after reopening.
             return false;
         }
     }
@@ -301,7 +301,6 @@ export default function MoneyOperationSheet({
             };
         }
 
-        // Save before sending. If storage fails, no request is sent.
         try {
             rememberAttempt(currentAttempt);
         } catch {
@@ -359,13 +358,14 @@ export default function MoneyOperationSheet({
                         duplicate: true,
                     });
                 }
-            } else if ([400, 403, 404, 422].includes(err.status)) {
-                // Any 4xx response — whether on the first attempt or a
-                // retry — proves the operation never succeeded. The
-                // backend's idempotency guarantee means a retry of an
-                // already-completed operation always returns 409
-                // DUPLICATE_TRANSACTION, never a 4xx. So it is always
-                // safe to clear the saved attempt and unlock the form.
+            } else if (
+                (!wasRetry && [400, 403, 404, 422].includes(err.status)) ||
+                (isTransfer && err.status === 400 && [
+                    'SAME_WALLET_TRANSFER',
+                    'CURRENCY_MISMATCH',
+                    'INSUFFICIENT_FUNDS',
+                ].includes(err.data?.error))
+            ) {
                 const removed = forgetStoredAttempt(currentAttempt);
 
                 if (removed) {
@@ -374,7 +374,7 @@ export default function MoneyOperationSheet({
                     if (mountedRef.current) setAttempt(null);
                 }
 
-                if (mountedRef.current) {
+                if (mountedRef.current && sameOwner()) {
                     setError(
                         removed
                             ? err.message || 'The operation was rejected.'
@@ -382,7 +382,7 @@ export default function MoneyOperationSheet({
                             'could not be cleared. Retry the same operation.',
                     );
                 }
-            } else if (mountedRef.current) {
+            } else if (mountedRef.current && sameOwner()) {
                 setError(
                     `The ${operationName} result is still unknown. ` +
                     'Retry the same operation to check it, or close this window ' +
