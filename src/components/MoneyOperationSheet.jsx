@@ -3,6 +3,7 @@ import Sheet from './Sheet';
 import Stamp from './Stamp';
 import FormError from './FormError';
 import { api, getSession } from '../lib/api';
+import { usePrivacy } from '../lib/privacy';
 import {
     CURRENCY_INFO,
     compareMoney,
@@ -66,6 +67,7 @@ export default function MoneyOperationSheet({
                                                 onClose,
                                                 onDone,
                                             }) {
+    const { hidden } = usePrivacy();
     const isTransfer = kind === 'transfer';
     const operationName = isTransfer ? 'transfer' : 'deposit';
     const info = CURRENCY_INFO[wallet.currency];
@@ -116,6 +118,10 @@ export default function MoneyOperationSheet({
             mountedRef.current = false;
         };
     }, []);
+
+    function visibleMoney(value) {
+        return hidden ? '••••' : formatMoney(value, wallet.currency);
+    }
 
     function sameOwner() {
         const currentOwner = getSession()?.userId;
@@ -212,8 +218,9 @@ export default function MoneyOperationSheet({
                 updated,
                 result.duplicate
                     ? `${isTransfer ? 'Transfer' : 'Deposit'} already processed. Balance refreshed.`
-                    : `${isTransfer ? 'Sent' : 'Deposited'} ` +
-                    formatMoney(result.amount, wallet.currency),
+                    : isTransfer
+                        ? 'Transfer completed.'
+                        : 'Deposit completed.',
             );
         } catch (err) {
             if (mountedRef.current && sameOwner()) {
@@ -276,11 +283,7 @@ export default function MoneyOperationSheet({
                 }
 
                 if (compareMoney(parsed, wallet.balance) > 0) {
-                    setError(
-                        `That is more than the ${
-                            formatMoney(wallet.balance, wallet.currency)
-                        } available.`,
-                    );
+                    setError('That is more than the available balance.');
                     return;
                 }
             }
@@ -427,7 +430,7 @@ export default function MoneyOperationSheet({
                     <dl>
                         <div>
                             <dt>Amount</dt>
-                            <dd>{formatMoney(result.amount, wallet.currency)}</dd>
+                            <dd>{visibleMoney(result.amount)}</dd>
                         </div>
 
                         {isTransfer && (
@@ -440,9 +443,7 @@ export default function MoneyOperationSheet({
                         {result.updated && (
                             <div>
                                 <dt>New balance</dt>
-                                <dd>
-                                    {formatMoney(result.updated.balance, wallet.currency)}
-                                </dd>
+                                <dd>{visibleMoney(result.updated.balance)}</dd>
                             </div>
                         )}
                     </dl>
@@ -472,7 +473,7 @@ export default function MoneyOperationSheet({
                 <form className="sheet-form" onSubmit={submit} noValidate>
                     <p className="sheet-note">
                         Wallet No. {wallet.id},{' '}
-                        {formatMoney(wallet.balance, wallet.currency)} available.
+                        {visibleMoney(wallet.balance)} available.
                         {isTransfer && (
                             <> You can only send to another {wallet.currency} wallet.</>
                         )}
@@ -508,6 +509,7 @@ export default function MoneyOperationSheet({
                         </label>
                         <input
                             id="operation-amount"
+                            type={hidden ? 'password' : 'text'}
                             inputMode="decimal"
                             autoComplete="off"
                             placeholder="0.00"

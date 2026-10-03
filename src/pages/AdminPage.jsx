@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
+import Amt from '../components/Amt';
 import CopyButton from '../components/CopyButton';
 import FormError from '../components/FormError';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
-import { formatMoney, sortWallets } from '../lib/format';
+import { sortWallets } from '../lib/format';
 
 export default function AdminPage() {
   const { user } = useAuth();
@@ -31,17 +32,13 @@ function AdminUsers() {
       try {
         const next = await api.users();
 
-        if (active) {
-          setUsers(next);
-        }
+        if (active) setUsers(next);
       } catch (err) {
         if (active) {
           setError(err.message || 'Could not load users.');
         }
       } finally {
-        if (active) {
-          setLoading(false);
-        }
+        if (active) setLoading(false);
       }
     }
 
@@ -141,8 +138,8 @@ function UserRow({ user }) {
           <span className="user-id">{user.id}</span>
 
           <span className="user-name">
-          {user.firstName} {user.lastName}
-        </span>
+                    {user.firstName} {user.lastName}
+                </span>
 
           <span className="user-mail">{user.email}</span>
 
@@ -190,17 +187,13 @@ function UserWallets({ userId, panelId }) {
       try {
         const next = sortWallets(await api.walletsOf(userId));
 
-        if (active) {
-          setWallets(next);
-        }
+        if (active) setWallets(next);
       } catch (err) {
         if (active) {
           setError(err.message || 'Could not load these wallets.');
         }
       } finally {
-        if (active) {
-          setLoading(false);
-        }
+        if (active) setLoading(false);
       }
     }
 
@@ -237,8 +230,8 @@ function UserWallets({ userId, panelId }) {
 
         {!loading && !error && wallets?.length === 0 && (
             <span className="muted">
-          This user has no wallets yet.
-        </span>
+                    This user has no wallets yet.
+                </span>
         )}
 
         {!loading && !error && wallets?.map((wallet) => (
@@ -249,8 +242,8 @@ function UserWallets({ userId, panelId }) {
               <span className="chip-code">{wallet.currency}</span>
               <span className="chip-id">No. {wallet.id}</span>
               <span className="chip-balance">
-            {formatMoney(wallet.balance, wallet.currency)}
-          </span>
+                        <Amt value={wallet.balance} currency={wallet.currency} />
+                    </span>
               <CopyButton
                   value={wallet.id}
                   message={`Wallet No. ${wallet.id} copied`}
