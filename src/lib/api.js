@@ -10,17 +10,75 @@ export class ApiError extends Error {
   }
 }
 
-let session = readSession();
+function readStoredSession() {
+  try {
+    return localStorage.getItem(STORAGE_KEY);
+  } catch {
+    return undefined;
+  }
+}
+
+function parseSession(raw) {
+  try {
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+let storedSessionRaw = readStoredSession();
+let session = parseSession(storedSessionRaw);
 let refreshing = null;
 let sessionVersion = 0;
 let onSessionLost = () => {};
 
-function readSession() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY));
-  } catch {
-    return null;
+const externalSessionListeners = new Set();
+
+function sameLogin(left, right) {
+  if (!left || !right) return left === right;
+
+  return (
+      String(left.userId) === String(right.userId) &&
+      left.refreshToken === right.refreshToken &&
+      left.email === right.email
+  );
+}
+
+export function synchronizeSession() {
+  const raw = readStoredSession();
+
+  if (raw === undefined || raw === storedSessionRaw) return;
+
+  const next = parseSession(raw);
+  const loginChanged = !sameLogin(session, next);
+
+  storedSessionRaw = raw;
+  session = next;
+
+  if (loginChanged) {
+    sessionVersion += 1;
+    refreshing = null;
+
+    for (const listener of externalSessionListeners) {
+      listener();
+    }
   }
+}
+
+export function onExternalSessionChanged(handler) {
+  externalSessionListeners.add(handler);
+
+  return () => externalSessionListeners.delete(handler);
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === STORAGE_KEY || event.key === null) {
+      synchronizeSession();
+    }
+  });
+
+  window.addEventListener('focus', synchronizeSession);
 }
 
 export const getSession = () => session;
@@ -35,14 +93,16 @@ function persistSession(next) {
   session = next;
 
   try {
-    if (next) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    const raw = next ? JSON.stringify(next) : null;
+
+    if (raw !== null) {
+      localStorage.setItem(STORAGE_KEY, raw);
     } else {
       localStorage.removeItem(STORAGE_KEY);
     }
-  } catch {
-    // Keep the session in memory when storage is unavailable.
-  }
+
+    storedSessionRaw = raw;
+  } catch {}
 }
 
 export function onSessionExpired(handler) {
@@ -112,6 +172,8 @@ function messageFrom(data, status) {
 }
 
 function assertCurrentSession(version) {
+  synchronizeSession();
+
   if (version !== sessionVersion) {
     throw new ApiError(
         401,
@@ -157,7 +219,6 @@ function refreshAccessToken(version) {
 
     assertCurrentSession(version);
 
-    // Only an explicit authentication rejection expires the session.
     if (res.status === 401 || res.status === 403) {
       return false;
     }
@@ -343,9 +404,7 @@ export const api = {
         body: { refreshToken },
         auth: false,
       });
-    } catch {
-      // A failed revoke should not block local sign-out.
-    }
+    } catch {}
   },
 
   user: (id) => request(`/api/users/${id}`),
