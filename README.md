@@ -45,11 +45,12 @@ This is a portfolio application. Deposits and transfers update application balan
 
 ## Tech Stack
 
-- React 18
-- Vite 5
-- React Router 6
-- Recharts
+- React 18.3
+- Vite 8.3
+- React Router 7.18
+- Recharts 2.15
 - lucide-react
+- Vitest 5, React Testing Library and jsdom
 - Vercel
 
 ## Main Files
@@ -69,6 +70,10 @@ This is a portfolio application. Deposits and transfers update application balan
 | `src/pages/AdminPage.jsx` | Admin user and wallet directory |
 | `src/components/MoneyOperationSheet.jsx` | Shared deposit and transfer lifecycle |
 | `src/components/Sheet.jsx` | Modal dialog and keyboard focus management |
+| `src/lib/api.test.js` | API client regression tests |
+| `src/components/MoneyOperationSheet.test.jsx` | Deposit and transfer regression tests |
+| `src/test/setup.js` | Test environment setup |
+| `vitest.config.js` | Vitest configuration |
 
 ## Authentication and Sessions
 
@@ -77,6 +82,20 @@ Authenticated requests include:
 ```http
 Authorization: Bearer <accessToken>
 ```
+
+The client loads the current profile through `GET /api/users/me`, using the bearer token. The response includes the user's role:
+
+```json
+{
+  "id": 6,
+  "firstName": "Transfer",
+  "lastName": "Receiver",
+  "email": "receiver@example.com",
+  "role": "USER"
+}
+```
+
+Admin navigation is enabled when this response contains `role: "ADMIN"`. Profile hydration does not download the user directory or infer permissions from token claims.
 
 When an authenticated request receives `401`, the client attempts to refresh the access token. Concurrent requests share the same refresh operation.
 
@@ -134,9 +153,11 @@ A network failure or lost response can leave the result unknown. In that case:
 
 A success or duplicate-operation response is acknowledged through the receipt. Selecting Done refreshes the wallet before clearing the pending record.
 
+Both receipt types offer “Close without refreshing”, including when the balance refresh fails. This closes the dialog while preserving the original operation key and payload. Reopening the dialog allows recovery with the same key. The displayed wallet balance may remain stale until refreshed. Closing does not cancel or reverse the operation.
+
 A late response received after closing the dialog does not discard the pending operation.
 
-Pending records use `sessionStorage`; they are not a durable transaction log. Closing the browser tab can remove them. Check transaction history before starting another operation when the previous result remains uncertain.
+Pending records use `sessionStorage`; they are not shared between tabs and are not a durable transaction log. Closing the browser tab can remove them. Check transaction history before starting another operation when the previous result remains uncertain.
 
 ## Money Representation
 
@@ -162,7 +183,7 @@ The chart converts balances to JavaScript numbers only for plotting. Its tooltip
 
 Transaction history is paginated. Newer transactions appear first, with the transaction ID used to break timestamp ties.
 
-The balance chart uses a recent transaction window and the associated wallet balance. When the window does not contain the full history, the interface indicates its limited coverage.
+The balance chart requests `GET /api/transactions/wallet/{id}/window?size=100`. This endpoint returns a recent transaction window and its associated wallet balance from the same database snapshot. Balances are reconstructed from that snapshot. When the window does not contain the full history, the interface indicates its limited coverage.
 
 Transaction timestamps include timezone information. The browser displays dates and times in the user's local timezone.
 
@@ -172,7 +193,7 @@ The backend enforces ownership and role permissions. Client-side route guards im
 
 Users can access their own wallet data. Attempts to open unavailable or unauthorized wallets display an error state.
 
-The admin page lists users and loads their wallets on demand. Admin detection can use token claims or the protected user-list endpoint. The backend remains responsible for authorizing every request.
+The admin page requests the ADMIN-only `GET /api/users` endpoint and loads users' wallets on demand. Admin status comes from the role returned by `GET /api/users/me`. The backend remains responsible for authorizing every request.
 
 ## Privacy and Accessibility
 
@@ -194,14 +215,14 @@ UTF-8 bytes are not the same as characters: accented characters and emoji can us
 
 ### Requirements
 
-- Node.js compatible with Vite 5
+- Node.js 24 LTS
 - npm
 - A reachable backend
 
 ### Install
 
 ```bash
-npm install
+npm ci
 ```
 
 Create `.env` from `.env.example`.
@@ -278,7 +299,9 @@ When `VITE_API_URL` is empty, the deployed client uses the API rewrite.
 
 When `VITE_API_URL` contains an absolute backend URL, requests go directly to that backend and require suitable CORS configuration.
 
-Changing a `VITE_*` value requires rebuilding the frontend.
+Changing a `VITE_*` value requires rebuilding the frontend. Use Node.js 24 for the build.
+
+Deploy a backend version supporting `GET /api/users/me` before deploying this frontend version.
 
 ## Security Considerations
 
@@ -290,30 +313,42 @@ Ownership checks, role checks, amount validation and idempotency enforcement rem
 
 ## Verification
 
-The production build can be checked with:
+Run the regression suite and production build:
 
 ```bash
+npm test
 npm run build
 ```
 
-The project does not yet include an automated frontend test suite. A successful build checks compilation and bundling; it does not prove runtime behavior.
+For watch mode:
 
-Important regression scenarios include:
+```bash
+npm run test:watch
+```
 
-- Concurrent `401` responses sharing one refresh request
-- A final `401` clearing the session
-- Network and `5xx` failures preserving the session
-- Logout and account changes between tabs
-- A money-operation response arriving after its dialog closes
-- Retrying an uncertain operation with the original key
-- Duplicate-operation acknowledgement and balance refresh
-- Amount privacy in dialogs and admin balances
-- Tab, Shift+Tab and Escape behavior in dialogs
+The current suite contains **25 tests across two files**:
+
+| Test file | Tests | Coverage |
+|---|---:|---|
+| `src/lib/api.test.js` | 11 | Shared refresh, transient failures, final authorization failures, session changes and idempotency headers on retries |
+| `src/components/MoneyOperationSheet.test.jsx` | 14 | Uncertain results, retained keys and payloads, late responses, rejection handling, storage failures, privacy and closing receipts after a failed balance refresh |
+
+These tests use mocked requests and component dependencies. They do not replace browser end-to-end tests or backend integration tests. A successful build checks compilation and bundling.
+
+Manual regression checks include:
+
+- Registration, login, logout and startup retry after a temporary backend failure
+- `GET /api/users/me` returning the authenticated profile and role
+- Deposits, transfers, transaction pagination and the balance chart
+- Account changes and logout across actual browser tabs
+- Admin access and rejection of unauthorized requests
+- Amount privacy in cards, history, dialogs and admin balances
+- Tab, Shift+Tab, Escape and focus restoration in the actual modal dialog
 
 ## Future Improvements
 
-- Automated component and end-to-end regression tests
-- A dedicated current-user endpoint for profile and role information
+- Browser end-to-end regression tests
+- Additional tests for profile hydration, dashboard loading, charts and modal focus behavior
 - Paginated admin user listing
 - Refresh-token storage through secure cookies
 - Account settings
