@@ -2,18 +2,20 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A **React + Vite** single-page client for the [Digital Wallet API](https://github.com/RazvanBogdan28/Digital-Wallet-API), a Spring Boot backend for user authentication, multi-currency wallets, deposits and idempotent transfers.
+A React and Vite client for the [Digital Wallet API](https://github.com/RazvanBogdan28/Digital-Wallet-API), built with Spring Boot.
 
-The client focuses on **clean state management, resilient API handling (automatic token refresh, retry-once-on-401) and a distinctive, editorial visual identity** rather than a generic dashboard look.
+The application supports authentication, multi-currency wallets, deposits, transfers and transaction history. It handles token refresh, uncertain payment results and session changes between browser tabs.
 
 ## Live Demo
 
-- **App:** https://digitalwalletfrontend.vercel.app
-- **Backend API:** https://digital-wallet-api-production-2f16.up.railway.app
-- **Backend Swagger UI:** https://digital-wallet-api-production-2f16.up.railway.app/swagger-ui/index.html
-- **Backend repo:** https://github.com/RazvanBogdan28/Digital-Wallet-API
+- [Frontend](https://digitalwalletfrontend.vercel.app)
+- [Backend API](https://digital-wallet-api-production-2f16.up.railway.app)
+- [Swagger UI](https://digital-wallet-api-production-2f16.up.railway.app/swagger-ui/index.html)
+- [Backend repository](https://github.com/RazvanBogdan28/Digital-Wallet-API)
 
-Create an account on the live app to try it — registration is open, and wallets start at a balance of 0.
+Registration is open. New wallets start with a zero balance.
+
+This is a portfolio application. Deposits and transfers update application balances; they do not process real bank payments.
 
 ## Screenshots
 
@@ -27,128 +29,300 @@ Create an account on the live app to try it — registration is open, and wallet
 
 ## Features
 
-- Email/password registration and sign in
-- Stateless JWT auth with silent, single-flight **access token refresh** on 401 — a user is never bounced to the login screen mid-session just because their access token expired
-- Multi-currency wallets (EUR, USD, RON), one per currency per user
-- Deposits and wallet-to-wallet transfers, with a client-generated **Idempotency-Key** per transfer so a double-tap or a retried request never sends money twice
-- Paginated transaction history with a derived balance-over-time chart
-- Wallet **ownership enforcement** reflected in the UI — attempting to open another user's wallet shows a clear "you do not have access" state instead of leaking data
-- Admin view listing all users and, on demand, their wallets (role-gated, hidden entirely from non-admin accounts)
-- "Hide amounts" privacy toggle, persisted locally, for using the app in public
-- Toast notifications, inline form validation, and human-readable error messages mapped from the API's structured error responses
-- Responsive layout with a print/export-style "wallet card" visual per currency
+- Email and password registration and login
+- Automatic access token refresh with a single shared refresh request
+- Session synchronization between browser tabs
+- EUR, USD and RON wallets, with one wallet per currency per user
+- Deposits and transfers with an `Idempotency-Key`
+- Recovery of pending operations after a lost response
+- Paginated transaction history
+- Balance chart derived from a recent transaction window
+- Separate loading, error and retry states for wallet data and transaction activity
+- Admin user directory with expandable wallet balances
+- Persistent “Hide amounts” preference
+- Keyboard focus containment in modal dialogs
+- Responsive wallet cards, transaction tables and notifications
 
 ## Tech Stack
 
 - React 18
-- Vite
+- Vite 5
 - React Router 6
-- Recharts (balance chart)
-- lucide-react (icons)
-- Vercel (hosting, with `vercel.json` rewrites)
+- Recharts
+- lucide-react
+- Vercel
 
-## Architecture
+## Main Files
 
-```text
-src/
-├── App.jsx                 route table + auth/admin route guards
-├── main.jsx                app entry, providers
-├── lib/
-│   ├── api.js               fetch wrapper: auth header, error mapping, token refresh + retry
-│   ├── auth.jsx              AuthProvider — session state, login/register/logout, admin detection
-│   ├── privacy.jsx           "hide amounts" toggle, persisted to localStorage
-│   ├── ledger.js              transaction list → chart series / table rows
-│   └── format.js              currency + date formatting helpers
-├── pages/
-│   ├── AuthPage.jsx           sign in / register
-│   ├── Dashboard.jsx          wallet overview + recent activity
-│   ├── WalletPage.jsx         single wallet: balance chart, deposit, send, paginated history
-│   └── AdminPage.jsx          admin-only user directory
-└── components/                 wallet "card" visuals, deposit/send sheets, toasts, ledger table, etc.
+| File | Responsibility |
+|---|---|
+| `src/App.jsx` | Routes and authentication/admin guards |
+| `src/main.jsx` | Application entry and providers |
+| `src/lib/api.js` | Requests, error handling, token refresh and session synchronization |
+| `src/lib/auth.jsx` | Authentication state, hydration, login, registration and logout |
+| `src/lib/privacy.jsx` | Amount visibility preference |
+| `src/lib/format.js` | Money, currency and date helpers |
+| `src/lib/ledger.js` | Transaction rows and balance reconstruction |
+| `src/pages/AuthPage.jsx` | Login and registration forms |
+| `src/pages/Dashboard.jsx` | Wallet overview and recent activity |
+| `src/pages/WalletPage.jsx` | Wallet details, balance chart and transaction pagination |
+| `src/pages/AdminPage.jsx` | Admin user and wallet directory |
+| `src/components/MoneyOperationSheet.jsx` | Shared deposit and transfer lifecycle |
+| `src/components/Sheet.jsx` | Modal dialog and keyboard focus management |
+
+## Authentication and Sessions
+
+Authenticated requests include:
+
+```http
+Authorization: Bearer <accessToken>
 ```
 
-### Session handling
+When an authenticated request receives `401`, the client attempts to refresh the access token. Concurrent requests share the same refresh operation.
 
-All authenticated requests go through a single `request()` helper in `lib/api.js`:
+After a successful refresh, the original request is retried once. If that request also receives `401`, the session is cleared and the authentication state is updated.
 
-1. Attaches `Authorization: Bearer <accessToken>` from the in-memory/localStorage session.
-2. On a `401`, triggers **one** shared refresh call (concurrent 401s await the same in-flight refresh instead of each starting their own) and retries the original request exactly once with the new token.
-3. If the retry also fails, the session is cleared and the user is routed back to sign in — otherwise, expired tokens are invisible to the user.
+Network errors and temporary server failures do not, by themselves, clear the session. A failed initial profile load can be retried without discarding stored credentials.
 
-### Ownership and roles in the UI
+Session changes are synchronized between tabs. Logout or login with another account invalidates requests belonging to the previous session. Responses from those requests must not restore the previous account.
 
-The backend enforces wallet ownership and admin-only routes; the frontend mirrors this defensively:
+The session is stored in `localStorage`, with an in-memory copy used by the API client.
 
-- `WalletPage` renders a dedicated "Wallet unavailable" state on a `403`, rather than a generic error.
-- `/admin` is guarded client-side: after sign-in the app probes the admin-only `GET /api/users` endpoint and only shows the admin view if it succeeds. Non-admins never see it in navigation — and the backend remains the actual source of truth, re-checking the role on every request.
+## Deposits and Transfers
 
-### Security notes
+Both operations require an `Idempotency-Key` header.
 
-The session (access and refresh tokens) is kept in browser storage. That is a common and convenient choice for a demo client, but it means the tokens are readable by any script that runs in the page, so an XSS vulnerability would expose them.
+```http
+POST /api/wallets/{id}/deposit
+Content-Type: application/json
+Authorization: Bearer <accessToken>
+Idempotency-Key: <unique-operation-key>
+```
 
-A production hardening step would be to have the backend set the refresh token in an `HttpOnly`, `Secure`, `SameSite` cookie and keep only the short-lived access token in memory. The `vercel.json` rewrites already keep the frontend and the API on the same origin, which makes that change straightforward.
+```json
+{
+  "amount": "25.50"
+}
+```
 
-As always, the backend remains the source of truth: every role and ownership check is re-validated on the server.
+```http
+POST /api/wallets/{id}/transfer
+Content-Type: application/json
+Authorization: Bearer <accessToken>
+Idempotency-Key: <unique-operation-key>
+```
+
+```json
+{
+  "toWalletId": 42,
+  "amount": "25.50",
+  "description": "Shared expenses"
+}
+```
+
+The client creates a key for a new operation and reuses the same key and payload when retrying it.
+
+Before sending the request, the pending operation is saved in `sessionStorage`. The stored record is scoped to the API, account, wallet and operation type.
+
+A network failure or lost response can leave the result unknown. In that case:
+
+- The operation retains its original key and payload.
+- The form prevents changes that would turn the retry into another operation.
+- “Retry same deposit” or “Retry same transfer” checks the same operation.
+- Closing the dialog does not cancel the server request.
+- “Close anyway” warns the user and preserves the pending operation for reopening in the same tab.
+
+A success or duplicate-operation response is acknowledged through the receipt. Selecting Done refreshes the wallet before clearing the pending record.
+
+A late response received after closing the dialog does not discard the pending operation.
+
+Pending records use `sessionStorage`; they are not a durable transaction log. Closing the browser tab can remove them. Check transaction history before starting another operation when the previous result remains uncertain.
+
+## Money Representation
+
+The API returns transaction amounts and wallet balances as decimal strings:
+
+```json
+{
+  "balance": "125.50"
+}
+```
+
+```json
+{
+  "amount": "25.50"
+}
+```
+
+The frontend uses integer cents with `BigInt` for money comparisons and balance reconstruction. Displayed amounts retain two decimal places.
+
+The chart converts balances to JavaScript numbers only for plotting. Its tooltip formats the original decimal balance.
+
+## Transaction History and Time
+
+Transaction history is paginated. Newer transactions appear first, with the transaction ID used to break timestamp ties.
+
+The balance chart uses a recent transaction window and the associated wallet balance. When the window does not contain the full history, the interface indicates its limited coverage.
+
+Transaction timestamps include timezone information. The browser displays dates and times in the user's local timezone.
+
+## Ownership and Admin Access
+
+The backend enforces ownership and role permissions. Client-side route guards improve navigation but do not replace server authorization.
+
+Users can access their own wallet data. Attempts to open unavailable or unauthorized wallets display an error state.
+
+The admin page lists users and loads their wallets on demand. Admin detection can use token claims or the protected user-list endpoint. The backend remains responsible for authorizing every request.
+
+## Privacy and Accessibility
+
+The “Hide amounts” preference is stored locally and masks amounts in wallet cards, transaction rows, admin balances and money-operation dialogs. Money-operation notifications use messages without amounts.
+
+This preference changes presentation only. It does not remove financial data from API responses or browser memory.
+
+Modal dialogs support Escape, contain keyboard focus and make the background inactive while open. Focus returns to the previous element when the dialog closes.
+
+## Password Validation
+
+Registration requires at least eight characters.
+
+Passwords must not exceed 72 UTF-8 bytes. This limit is checked by both the frontend and backend.
+
+UTF-8 bytes are not the same as characters: accented characters and emoji can use multiple bytes.
 
 ## Running Locally
 
 ### Requirements
 
-- Node.js 18+
-- The backend running somewhere reachable (locally, or the deployed Railway instance)
+- Node.js compatible with Vite 5
+- npm
+- A reachable backend
 
-### Setup
+### Install
 
 ```bash
 npm install
+```
+
+Create `.env` from `.env.example`.
+
+PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Bash:
+
+```bash
 cp .env.example .env
+```
+
+To use a local backend:
+
+```dotenv
+VITE_API_URL=
+VITE_PROXY_TARGET=http://localhost:8080
+```
+
+Start the frontend:
+
+```bash
 npm run dev
 ```
 
-By default `VITE_API_URL` is left empty, so the Vite dev server proxies any `/api/...` call to the backend defined in `VITE_PROXY_TARGET` (the deployed Railway API by default) — this avoids CORS entirely during local development. Point `VITE_PROXY_TARGET` at `http://localhost:8080` instead if you're also running the backend locally.
-
-The app runs at:
+Open:
 
 ```text
 http://localhost:5173
 ```
 
-### Build
+### API Configuration
+
+With `VITE_API_URL` empty, requests use relative `/api/...` URLs.
+
+During development, Vite forwards these requests to `VITE_PROXY_TARGET`. The configured fallback target is the deployed Railway backend.
+
+To call a backend directly:
+
+```dotenv
+VITE_API_URL=http://localhost:8080
+```
+
+Direct requests require the backend to allow the frontend origin through CORS.
+
+Vite environment values are included in the frontend build. Do not put secrets in `VITE_*` variables.
+
+### Production Build
 
 ```bash
 npm run build
+```
+
+To inspect the build locally:
+
+```bash
 npm run preview
 ```
 
-## Deployment
+The development proxy is configured for `npm run dev`. Previewing the build requires a direct API URL or a separate proxy serving `/api` requests.
 
-The app is deployed on **Vercel**, connected to this repository for automatic deployment on every push to `main`. `vercel.json` rewrites `/api/*` requests to the Railway-hosted backend, so the deployed frontend also talks to the API same-origin, without needing `VITE_API_URL` set or CORS configured for cross-origin calls.
+## Deployment on Vercel
 
-## Related Project
+The repository includes `vercel.json` with:
 
-This client is the frontend half of a full-stack portfolio project. See the [Digital Wallet API](https://github.com/RazvanBogdan28/Digital-Wallet-API) repository for the Spring Boot backend, its architecture, and API documentation.
+- An `/api/*` rewrite to the Railway backend
+- A fallback rewrite to `index.html` for client-side routes
 
-## Project Goals
+When `VITE_API_URL` is empty, the deployed client uses the API rewrite.
 
-This project demonstrates frontend development concepts such as:
+When `VITE_API_URL` contains an absolute backend URL, requests go directly to that backend and require suitable CORS configuration.
 
-- consuming a JWT-secured REST API from a single-page app
-- resilient session handling (silent token refresh, single-flight requests)
-- role- and ownership-aware UI states
-- idempotent write operations from the client side
-- component-driven UI without a heavyweight framework
-- static-site deployment with API rewrites
+Changing a `VITE_*` value requires rebuilding the frontend.
+
+## Security Considerations
+
+Access and refresh tokens are stored in `localStorage`. Scripts running on the page can read them, so an XSS vulnerability could expose the session.
+
+Possible production improvements include an `HttpOnly`, `Secure` refresh-token cookie, a short-lived access token kept in memory and an appropriate CSRF strategy for cookie-based authentication.
+
+Ownership checks, role checks, amount validation and idempotency enforcement remain backend responsibilities.
+
+## Verification
+
+The production build can be checked with:
+
+```bash
+npm run build
+```
+
+The project does not yet include an automated frontend test suite. A successful build checks compilation and bundling; it does not prove runtime behavior.
+
+Important regression scenarios include:
+
+- Concurrent `401` responses sharing one refresh request
+- A final `401` clearing the session
+- Network and `5xx` failures preserving the session
+- Logout and account changes between tabs
+- A money-operation response arriving after its dialog closes
+- Retrying an uncertain operation with the original key
+- Duplicate-operation acknowledgement and balance refresh
+- Amount privacy in dialogs and admin balances
+- Tab, Shift+Tab and Escape behavior in dialogs
 
 ## Future Improvements
 
-Possible future additions:
+- Automated component and end-to-end regression tests
+- A dedicated current-user endpoint for profile and role information
+- Paginated admin user listing
+- Refresh-token storage through secure cookies
+- Account settings
+- Dark mode
 
-- refresh token in an `HttpOnly` cookie (see [Security notes](#security-notes))
-- automated end-to-end tests (Playwright/Cypress) covering the ownership and admin flows
-- optimistic UI updates for deposits/transfers
-- dark mode
-- account settings (password change, profile info)
+## Related Project
+
+See the [Digital Wallet API](https://github.com/RazvanBogdan28/Digital-Wallet-API) repository for backend setup, database migrations, tests and API documentation.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
