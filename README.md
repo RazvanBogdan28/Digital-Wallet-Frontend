@@ -4,13 +4,15 @@
 
 A React and Vite client for the [Digital Wallet API](https://github.com/RazvanBogdan28/Digital-Wallet-API), built with Spring Boot.
 
+The frontend is hosted on **Vercel** and uses the backend deployed on **AWS EC2**, reached through a Caddy HTTPS reverse proxy. It is the existing wallet foundation for the planned **SecurePay** platform.
+
 The application supports authentication, multi-currency wallets, deposits, transfers and transaction history. It handles token refresh, uncertain payment results and session changes between browser tabs.
 
 ## Live Demo
 
-- [Frontend](https://digitalwalletfrontend.vercel.app)
-- [Backend API](https://digital-wallet-api-production-2f16.up.railway.app)
-- [Swagger UI](https://digital-wallet-api-production-2f16.up.railway.app/swagger-ui/index.html)
+- [Frontend](https://securepay.nexyn.ro)
+- [Backend API](https://api.nexyn.ro)
+- [Swagger UI](https://api.nexyn.ro/swagger-ui/index.html)
 - [Backend repository](https://github.com/RazvanBogdan28/Digital-Wallet-API)
 
 Registration is open. New wallets start with a zero balance.
@@ -262,7 +264,9 @@ http://localhost:5173
 
 With `VITE_API_URL` empty, requests use relative `/api/...` URLs.
 
-During development, Vite forwards these requests to `VITE_PROXY_TARGET`. The configured fallback target is the deployed Railway backend.
+During development, Vite forwards these requests to `VITE_PROXY_TARGET`. Set this variable explicitly: the existing development fallback may still point to the former Railway deployment. Changing the production rewrite does not change Vite's development proxy.
+
+For local development, use `VITE_PROXY_TARGET=http://localhost:8080`. To test against AWS, set `VITE_PROXY_TARGET=https://api.nexyn.ro` and ensure the backend CORS configuration permits your local frontend origin. The current AWS origin list contains the deployed frontend domains; localhost is not included.
 
 To call a backend directly:
 
@@ -290,18 +294,56 @@ The development proxy is configured for `npm run dev`. Previewing the build requ
 
 ## Deployment on Vercel
 
-The repository includes `vercel.json` with:
+The production frontend is available at **https://securepay.nexyn.ro**. The original `https://digitalwalletfrontend.vercel.app` address remains available.
 
-- An `/api/*` rewrite to the Railway backend
-- A fallback rewrite to `index.html` for client-side routes
+The current `vercel.json` is:
 
-When `VITE_API_URL` is empty, the deployed client uses the API rewrite.
+```json
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://api.nexyn.ro/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
+```
 
-When `VITE_API_URL` contains an absolute backend URL, requests go directly to that backend and require suitable CORS configuration.
+Keep `VITE_API_URL` empty or unset in Vercel when using this rewrite. An absolute value bypasses the rewrite and sends requests directly to that address. Remove a previous Railway value before rebuilding.
 
-Changing a `VITE_*` value requires rebuilding the frontend. Use Node.js 24 for the build.
+The request path is:
+
+```mermaid
+flowchart TD
+    Browser["Browser · securepay.nexyn.ro"] --> Vercel["Vercel · frontend and /api rewrite"]
+    Vercel -->|HTTPS| Caddy["Caddy · api.nexyn.ro"]
+    Caddy --> API["Spring Boot · AWS EC2"]
+    API --> Database["PostgreSQL · AWS EC2"]
+```
+
+The AWS backend allows the frontend origins `https://securepay.nexyn.ro` and `https://digitalwalletfrontend.vercel.app`. Keep the CORS origin list aligned with deployed frontend domains, including when requests are forwarded through Vercel. Configure the backend environment and recreate its container after changing that list.
+
+Build and deploy from the frontend repository through Vercel. Git pushes to its production branch trigger frontend deployments. Changing a `VITE_*` value requires rebuilding the frontend. Use Node.js 24 for the build.
+
+The backend uses an Elastic IP and Caddy-managed HTTPS. Backend updates on EC2 are currently manual; the frontend deployment does not deploy the backend.
+
+AWS started with a new database. Accounts and wallet history from Railway were not migrated. Browser storage is scoped to the origin, so a session on the original Vercel domain does not automatically become a session on `securepay.nexyn.ro`.
 
 Deploy a backend version supporting `GET /api/users/me` before deploying this frontend version.
+
+## Deployment Verification
+
+The AWS rollout was manually checked for registration, authentication, wallet creation, deposits, transfers, wallet balances and transaction history. The public API health endpoint returned `UP`:
+
+```text
+https://api.nexyn.ro/actuator/health
+```
+
+The backend has scheduled local PostgreSQL backups and a completed restore drill. Automated off-instance backup uploads and continuous uptime alerting are not configured. See the backend README for operational details.
 
 ## Security Considerations
 
@@ -344,6 +386,12 @@ Manual regression checks include:
 - Admin access and rejection of unauthorized requests
 - Amount privacy in cards, history, dialogs and admin balances
 - Tab, Shift+Tab, Escape and focus restoration in the actual modal dialog
+
+## SecurePay Evolution
+
+The current UI supports the deployed wallet features. Payment-provider integration, payment orchestration, risk scoring, merchant webhooks and asynchronous notifications are planned capabilities, not current features.
+
+The initial direction is a modular Spring Boot monolith. Separate services and Kubernetes can be considered later if scaling or deployment requirements justify them.
 
 ## Future Improvements
 
