@@ -2,8 +2,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://digital-wallet-api-production-2f16.up.railway.app/api/:path*"
+      "destination": "https://api.nexyn.ro/api/:path*"
     },
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
   ]
 }
